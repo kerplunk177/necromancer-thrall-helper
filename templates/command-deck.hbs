@@ -1,0 +1,89 @@
+<div class="thrall-deck-wrapper">
+    <header>
+        <div class="header-info">
+            <h2>{{actorName}}</h2>
+            <span class="subtext">Lvl {{actorLevel}} | Thrall DMG: {{thrallDamage}}</span>
+        </div>
+        
+        <div class="map-tracker">
+            <span>MAP:</span>
+            <button type="button" class="map-pip {{map0Active}}" data-value="0">0</button>
+            <button type="button" class="map-pip {{map5Active}}" data-value="-5">-5</button>
+            <button type="button" class="map-pip {{map10Active}}" data-value="-10">-10</button>
+        </div>
+    </header>
+
+    <!-- Administrative Controls -->
+    <div class="roster-controls">
+        <button type="button" class="edit-portfolio-btn" title="Edit Thrall Portfolio">
+            <i class="fas fa-book-dead"></i> Edit Thrall Portfolio
+        </button>
+    </div>
+
+    <!-- Scrollable Roster -->
+    <section class="active-thralls-list">
+        {{#if activeThralls.length}}
+            {{#each activeThralls}}
+                <div class="thrall-row" data-token-id="{{this.id}}">
+                    <img src="{{this.img}}" alt="{{this.name}}" class="thrall-portrait">
+                    
+                    <div class="thrall-info">
+                        <div class="thrall-header-row">
+                            <span class="thrall-name">{{this.name}}</span>
+                            
+                            <!-- Tactical Proximity Tracker -->
+                            <div class="proximity-tracker">
+                                <span class="prox-badge enemy" title="Enemies within 10ft">
+                                    <i class="fas fa-biohazard"></i> {{this.nearbyEnemies}}
+                                </span>
+                                <span class="prox-badge friendly" title="Allies within 10ft">
+                                    <i class="fas fa-shield-alt"></i> {{this.nearbyFriendlies}}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Action Dropdown -->
+                        <div class="form-group">
+                            <select class="action-dropdown" name="action">
+                                <option value="strike">Strike</option>
+                                <option value="charge">Charge</option>
+                                <option value="guard">Guard</option>
+                                {{#if ../hasNecroticBomb}}
+                                    <option value="explode">Necrotic Bomb</option>
+                                {{/if}}
+                                {{#if ../hasLifeTap}}
+                                    <option value="life-tap">Life Tap</option>
+                                {{/if}}
+                                {{#if ../hasBloodInfusion}}
+                                    <option value="blood-infusion">Blood Infusion</option>
+                                {{/if}}
+                            </select>
+                        </div>
+
+                        <!-- Wide Action Buttons Row -->
+                        <div class="thrall-actions-row">
+                            <button type="button" class="action-btn execute-btn wide-btn" title="Execute Action">
+                                <i class="fas fa-swords"></i> Execute
+                            </button>
+                            <button type="button" class="action-btn kill-btn wide-btn" title="Dismiss Thrall">
+                                <i class="fas fa-skull"></i> Dismiss
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            {{/each}}
+        {{else}}
+            <p class="empty-state">No thralls active on this battlefield.</p>
+        {{/if}}
+    </section>
+
+    <!-- Static Footer -->
+    <footer>
+        <button type="button" class="spawn-btn" data-count="1">
+            <i class="fas fa-ghost"></i> Spawn 1
+        </button>
+        <button type="button" class="spawn-btn" data-count="2">
+            <i class="fas fa-skulls"></i> Spawn 2
+        </button>
+    </footer>
+</div>

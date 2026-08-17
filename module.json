@@ -1,0 +1,53 @@
+{
+  "id": "necromancer-thrall-helper",
+  "title": "Necromancer Thrall Helper",
+  "description": "A tactical command deck for managing PF2e Necromancer thralls, featuring dynamic scaling, GM socket spawning, and spatial proximity tracking.",
+  "version": "1.0.0",
+  "socket": true,
+  "compatibility": {
+    "minimum": "14",
+    "verified": "14",
+    "maximum": "14"
+  },
+  "authors": [
+    {
+      "name": "Sean Wright",
+      "flags": {}
+    }
+  ],
+  "relationships": {
+    "systems": [
+      {
+        "id": "pf2e",
+        "type": "system",
+        "compatibility": {
+          "minimum": "6.0.0"
+        }
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    {
+      "src": "styles/necro-thrall.css"
+    }
+  ],
+  "packs": [
+    {
+      "name": "necro-thralls",
+      "label": "Necromancer Thralls",
+      "path": "packs/necro-thralls",
+      "type": "Actor",
+      "system": "pf2e",
+      "ownership": {
+        "PLAYER": "OBSERVER",
+        "ASSISTANT": "OWNER"
+      }
+    }
+  ],
+  "manifest": "https://raw.githubusercontent.com/kerplunk177/necromancer-thrall-helper/main/module.json",
+  "download": "https://github.com/kerplunk177/necromancer-thrall-helper/releases/download/1.0.0/module.zip",
+  "flags": {}
+}

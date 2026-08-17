@@ -1,0 +1,79 @@
+<div class="portfolio-wrapper">
+    <section class="portfolio-list">
+        {{#if presets.length}}
+            {{#each presets}}
+                <div class="portfolio-row" data-id="{{this.id}}">
+                    <img src="{{this.img}}" alt="{{this.name}}" class="portfolio-portrait">
+                    <div class="portfolio-details">
+                        <span class="portfolio-name">{{this.name}}</span>
+                    </div>
+                    <div class="portfolio-actions">
+                        <button type="button" class="action-btn edit-preset-btn" title="Edit Thrall">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button type="button" class="action-btn delete-preset-btn" title="Remove from Portfolio">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            {{/each}}
+        {{else}}
+            <p class="empty-state">Your portfolio is empty. Time to recruit.</p>
+        {{/if}}
+    </section>
+
+    <hr>
+
+    <section class="portfolio-builder">
+        <h3 id="builder-heading">Draft New Thrall</h3>
+        <div class="form-group">
+            <input type="text" id="new-thrall-name" placeholder="Thrall Name">
+        </div>
+        <div class="form-group flexrow">
+            <input type="text" id="new-thrall-img" placeholder="Image Path">
+            <button type="button" class="file-picker-btn" title="Browse Files"><i class="fas fa-file-import"></i></button>
+        </div>
+
+        <div class="form-group adjective-section">
+            <div class="adjective-header">
+                <label>Adjective Pool</label>
+                <button type="button" id="select-all-adj-btn" class="sub-btn">Select All</button>
+            </div>
+            <div class="adjective-checkbox-grid">
+                <label><input type="checkbox" name="adjective" value="Angry"> Angry</label>
+                <label><input type="checkbox" name="adjective" value="Soggy"> Soggy</label>
+                <label><input type="checkbox" name="adjective" value="Vengeful"> Vengeful</label>
+                <label><input type="checkbox" name="adjective" value="Festering"> Festering</label>
+                <label><input type="checkbox" name="adjective" value="Hollow"> Hollow</label>
+                <label><input type="checkbox" name="adjective" value="Shivering"> Shivering</label>
+                <label><input type="checkbox" name="adjective" value="Wrinkled"> Wrinkled</label>
+                <label><input type="checkbox" name="adjective" value="Spiteful"> Spiteful</label>
+                <label><input type="checkbox" name="adjective" value="Damp"> Damp</label>
+                <label><input type="checkbox" name="adjective" value="Putrid"> Putrid</label>
+                <label><input type="checkbox" name="adjective" value="Screaming"> Screaming</label>
+                <label><input type="checkbox" name="adjective" value="Moth-Eaten"> Moth-Eaten</label>
+                <label><input type="checkbox" name="adjective" value="Bitter"> Bitter</label>
+                <label><input type="checkbox" name="adjective" value="Rancid"> Rancid</label>
+                <label><input type="checkbox" name="adjective" value="Happy"> Happy</label>
+                <label><input type="checkbox" name="adjective" value="Heroic"> Heroic</label>
+                <label><input type="checkbox" name="adjective" value="Stoic"> Stoic</label>
+                <label><input type="checkbox" name="adjective" value="Loving"> Loving</label>
+                <label><input type="checkbox" name="adjective" value="Earnest"> Earnest</label>
+                <label><input type="checkbox" name="adjective" value="Resolved"> Resolved</label>
+                <label><input type="checkbox" name="adjective" value="Baffled"> Baffled</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <input type="text" id="new-thrall-custom-adj" placeholder="Additional Custom Adjectives (comma-separated)">
+        </div>
+
+      <div class="form-group checkbox-group">
+            <label>
+                <input type="checkbox" id="new-thrall-unique" checked> Is Unique (Limit one active on field)
+            </label>
+        </div>
+
+        <button type="button" id="save-thrall-btn" class="add-thrall-btn"><i class="fas fa-plus"></i> Add to Portfolio</button>
+    </section>
+</div>
