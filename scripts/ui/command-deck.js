@@ -280,7 +280,6 @@ if (!CONFIG.Actor.documentClass.prototype._necroBombApplyDamage) {
     };
 }
 
-
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
 export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -365,14 +364,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         super(options);
 
         this.necroId = necroId;
+        this.actionStates = {}; 
+        this.imageCache = {}; 
 
         this._onTokenUpdate = Hooks.on("updateToken", (doc, changes) => {
             if (this.rendered && ("x" in changes || "y" in changes || "elevation" in changes)) {
-                setTimeout(() => this.render(true), 150);
+             
+                setTimeout(() => this.render({ force: false }), 150);
             }
         });
+        
         this._onTokenDelete = Hooks.on("deleteToken", () => {
-            if (this.rendered) this.render(true);
+            if (this.rendered) this.render({ force: false });
         });
     }
     /** @override */
@@ -441,10 +444,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     }
                 }
 
+           
+                let imgPath = t.texture?.src || t.actor?.img || "icons/svg/mystery-man.svg";
+                
+                if (imgPath && !imgPath.includes("mystery-man") && !imgPath.startsWith("data:") && !imgPath.startsWith("blob:")) {
+                    this.imageCache[t.id] = imgPath;
+                } else if (this.imageCache[t.id]) {
+                    imgPath = this.imageCache[t.id];
+                }
+
                 return {
                     id: t.id,
                     name: t.name,
-                    img: t.texture.src,
+                    img: imgPath,
                     nearbyEnemies: nearbyEnemies,
                     nearbyFriendlies: nearbyFriendlies
                 };
@@ -468,12 +480,27 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         };
     }
 
-    
-
     /** @override */
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
+
+        // --- RESTORE & TRACK DROPDOWN STATES ---
+        const dropdowns = html.querySelectorAll(".action-dropdown");
+        dropdowns.forEach(dropdown => {
+            const row = dropdown.closest(".thrall-row");
+            if (row) {
+                const tokenId = row.dataset.tokenId;
+                // Restore previously selected value if it exists
+                if (this.actionStates[tokenId]) {
+                    dropdown.value = this.actionStates[tokenId];
+                }
+                // Track changes so they survive the next re-render
+                dropdown.addEventListener("change", (e) => {
+                    this.actionStates[tokenId] = e.target.value;
+                });
+            }
+        });
 
         // Save position/size to local storage whenever you let go of the mouse
         html.addEventListener("pointerup", () => {
@@ -485,21 +512,23 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 height: this.position.height
             }));
         });
-// Edit Portfolio Button Logic
-const editPortfolioBtn = html.querySelector(".edit-portfolio-btn");
-if (editPortfolioBtn) {
-    editPortfolioBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        const actor = game.actors.get(this.necroId);
-        if (!actor) {
-            ui.notifications.warn("No Necromancer found!");
-            return;
-        }
         
-        // Instantiate and render the new UI
-        new PortfolioEditor(actor).render(true);
-    });
-}
+        // Edit Portfolio Button Logic
+        const editPortfolioBtn = html.querySelector(".edit-portfolio-btn");
+        if (editPortfolioBtn) {
+            editPortfolioBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const actor = game.actors.get(this.necroId);
+                if (!actor) {
+                    ui.notifications.warn("No Necromancer found!");
+                    return;
+                }
+                
+                // Instantiate and render the new UI
+                new PortfolioEditor(actor).render(true);
+            });
+        }
+
         // MAP button click logic
         const mapPips = html.querySelectorAll(".map-pip");
         mapPips.forEach(pip => {
@@ -606,10 +635,17 @@ if (editPortfolioBtn) {
                         return;
                     }
 
-                    // 4. Roll the Native PF2e Strike (Generates the Attack card)
-                    await strike.variants[variantIndex].roll({ event: eventObj });
+                   // 4. Roll the Native PF2e Strike (Generates the Attack card)
+await strike.variants[variantIndex].roll({ event: eventObj });
 
-                    // 5. Patient Cleanup Hook (Waits for the Damage Roll)
+
+if (this.currentMap === undefined || this.currentMap === 0) {
+    this.currentMap = -5;
+} else if (this.currentMap === -5) {
+    this.currentMap = -10;
+}
+this.render(false); 
+                    
                     if (isKamikaze) {
                         await tokenDoc.actor.update({ "system.attributes.hp.value": 0 }); // Visually drop them instantly
                     }
@@ -792,10 +828,7 @@ if (editPortfolioBtn) {
                         break;
                     }
                         
-                    case "guard": {
-                        ui.notifications.info(`${tokenDoc.name} is guarding.`);
-                        break;
-                    }
+            
                         
                     case "explode": {
                         const bombRank = Math.ceil(necroLevel / 2);
@@ -1083,7 +1116,6 @@ if (editPortfolioBtn) {
                                     ghost.destroy();
                                 };
 
-                                // The recursive click handler
                                 const interactionHandler = async (event) => {
                                     if (event.data.button !== 0 && event.data.button !== 2) {
                                         canvas.stage.once("pointerdown", interactionHandler);
@@ -1107,35 +1139,31 @@ if (editPortfolioBtn) {
                                     }
 
                                     // Fetch the payload for the specific preset chosen for this step
-const presetId = selections[currentSpawnIndex];
-const basePayload = await prepareThrallPayload(actor, presetId);
+                                    const presetId = selections[currentSpawnIndex];
+                                    const basePayload = await prepareThrallPayload(actor, presetId);
+                                    
+                                    if (!basePayload) { cleanUp(); return; }
 
-if (!basePayload) { cleanUp(); return; }
-
-const finalPayload = foundry.utils.mergeObject(basePayload, {
-    x: spawnX,
-    y: spawnY
-});
-
-// Clear the player's crosshair and ghost immediately so they aren't stuck waiting
-cleanUp();
-ui.notifications.info(`Spawn request for Summon ${currentSpawnIndex + 1} sent to GM...`);
-
-// CLEAN SOCKETLIB SPAWN ROUTE
-try {
-    await executeSpawn(finalPayload);
-} catch (err) {
-    console.error("Necromancer Helper | Spawn execution failed:", err);
-    ui.notifications.error("Failed to materialize the thrall.");
-}
+                                    const finalPayload = foundry.utils.mergeObject(basePayload, {
+                                        x: spawnX,
+                                        y: spawnY
+                                    });
 
                                     currentSpawnIndex++;
+                                    ui.notifications.info(`Spawn request for Summon ${currentSpawnIndex} sent to GM...`);
+
+                                    // Fire the socket call without blocking the multi-placement loop
+                                    executeSpawn(finalPayload).catch(err => {
+                                        console.error("Necromancer Helper | Spawn execution failed:", err);
+                                        ui.notifications.error("Failed to materialize the thrall.");
+                                    });
 
                                     if (currentSpawnIndex < count) {
                                         ui.notifications.info(`Place Summon ${currentSpawnIndex + 1}.`);
                                         canvas.stage.once("pointerdown", interactionHandler);
                                     } else {
                                         cleanUp();
+                                        ui.notifications.info("All summons placed.");
                                     }
                                 };
 
