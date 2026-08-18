@@ -194,6 +194,8 @@ Hooks.on("renderChatMessage", (message, html) => {
         `);
     }
 
+    const updates = {};
+
     $html.find('[data-token-id]').each((i, el) => {
         const $row = $(el);
         const tokenId = $row.attr('data-token-id');
@@ -205,8 +207,14 @@ Hooks.on("renderChatMessage", (message, html) => {
         const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
         const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
         
-        // Unaffected biology check: Living vs Vitality, Undead vs Void
         const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
+
+        if (game.user.isGM) {
+            const aoeTarget = message.flags?.["aoe-easy-resolve"]?.targets?.[tokenId];
+            if (aoeTarget && aoeTarget.isImmune !== isUnaffected) {
+                updates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isUnaffected;
+            }
+        }
 
         const toggleHtml = `
             <div class="necro-type-toggle" data-token-id="${tokenId}">
@@ -228,6 +236,10 @@ Hooks.on("renderChatMessage", (message, html) => {
             $row.find('.no-save-badge').remove();
         }
     });
+
+    if (!foundry.utils.isEmpty(updates) && game.user.isGM) {
+        setTimeout(() => message.update(updates), 50);
+    }
 
     $html.find('.type-btn').off('click').on('click', async (e) => {
         e.preventDefault();
