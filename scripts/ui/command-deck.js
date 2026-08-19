@@ -2,7 +2,53 @@ import { prepareThrallPayload, getThrallPresets } from "../system/thrall-manager
 import { PortfolioEditor } from "./portfolio-editor.js";
 import { executeSpawn } from "../system/socket.js";
 
-// --- BLOOD INFUSION AUTOMATION HOOK ---
+Hooks.on("pf2e.restForTheNight", async (actor) => {
+    if (actor.getFlag("necromancer-thrall-helper", "consumeThrallUsed")) {
+        await actor.unsetFlag("necromancer-thrall-helper", "consumeThrallUsed");
+    }
+});
+Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
+    if (!game.user.isGM) return;
+    const aoeFlags = message.flags?.["aoe-easy-resolve"];
+    if (!aoeFlags || aoeFlags.itemName !== "Dead Weight") return;
+
+    const targets = aoeFlags.targets || {};
+    for (const [tokenId, targetData] of Object.entries(targets)) {
+        if (targetData.hasApplied && !targetData._deadWeightProcessed) {
+            await message.update({ [`flags.aoe-easy-resolve.targets.${tokenId}._deadWeightProcessed`]: true });
+
+            const targetToken = canvas.tokens.get(tokenId);
+            if (!targetToken?.actor) continue;
+
+            const dos = targetData.degreeOfSuccess;
+            if (!dos || dos === "criticalSuccess") continue;
+
+            try {
+                if (typeof targetToken.actor.increaseCondition === "function") {
+                    await targetToken.actor.increaseCondition("off-guard");
+
+                    if (dos === "failure") {
+                        await targetToken.actor.increaseCondition("slowed", { value: 1 });
+                    } else if (dos === "criticalFailure") {
+                        await targetToken.actor.increaseCondition("slowed", { value: 2 });
+                    }
+                }
+            } catch (e) {
+                console.error("Necromancer Helper", e);
+            }
+
+            let flavorText = dos === "success" ? "is dragged down, leaving them <b>Off-Guard</b>!" :
+                             dos === "failure" ? "is burdened by the fusing flesh! They are <b>Slowed 1</b> and <b>Off-Guard</b>!" :
+                             "is completely overwhelmed by the crushing corpse! They are <b>Slowed 2</b> and <b>Off-Guard</b>!";
+
+            await ChatMessage.create({
+                speaker: ChatMessage.getSpeaker({ actor: targetToken.actor }),
+                flavor: `<strong>Dead Weight Result!</strong>`,
+                content: `<p><b>${targetToken.name}</b> ${flavorText}</p>`
+            });
+        }
+    }
+});
 Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
     if (!game.user.isGM) return;
     const aoeFlags = message.flags?.["aoe-easy-resolve"];
@@ -381,7 +427,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
         this._onTokenUpdate = Hooks.on("updateToken", (doc, changes) => {
             if (this.rendered && ("x" in changes || "y" in changes || "elevation" in changes)) {
-             
                 setTimeout(() => this.render({ force: false }), 150);
             }
         });
@@ -389,12 +434,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         this._onTokenDelete = Hooks.on("deleteToken", () => {
             if (this.rendered) this.render({ force: false });
         });
+
+        this._onActorUpdate = Hooks.on("updateActor", (doc, changes) => {
+            if (this.rendered && doc.id === this.necroId) {
+                this.render({ force: false });
+            }
+        });
     }
     /** @override */
     async close(options) {
-        // Clean up the hooks to prevent memory leaks when the window is closed
         Hooks.off("updateToken", this._onTokenUpdate);
         Hooks.off("deleteToken", this._onTokenDelete);
+        Hooks.off("updateActor", this._onActorUpdate);
         return super.close(options);
     }
 
@@ -476,7 +527,28 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         }
 
         const hasFocus = (actor?.system?.resources?.focus?.max || 0) > 0;
-        const hasSpell = (spellName) => actor?.items.some(i => i.type === "spell" && i.name.toLowerCase() === spellName.toLowerCase()) || false;
+        const hasSpell = (spellName) => {
+            const searchStr = spellName.toLowerCase().trim();
+            const searchSlug = searchStr.replace(/\s+/g, '-');
+            return actor?.items.some(i => 
+                ["spell", "feat", "action"].includes(i.type) && 
+                (i.name.toLowerCase().trim() === searchStr || i.system?.slug === searchSlug)
+            ) || false;
+        };
+        const hasPuppeteer = actor?.items.some(i => i.name.toLowerCase().includes("puppeteer") || (i.system?.slug && i.system.slug.includes("puppeteer"))) || false;
+        const consumeUsed = actor?.getFlag("necromancer-thrall-helper", "consumeThrallUsed") || false;
+        const currentFP = actor?.system?.resources?.focus?.value || 0;
+        
+        let consumeText = "Consume Thrall";
+        let consumeDisabled = false;
+
+        if (consumeUsed) {
+            consumeText = "Consume Thrall (Used Today)";
+            consumeDisabled = true;
+        } else if (currentFP > 0) {
+            consumeText = "Consume Thrall (Requires 0 FP)";
+            consumeDisabled = true;
+        }
 
         return {
             actorName: actor?.name || "Necromancer",
@@ -486,9 +558,14 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             map0Active: mapPenalty === 0 ? "active" : "",
             map5Active: mapPenalty === -5 ? "active" : "",
             map10Active: mapPenalty === -10 ? "active" : "",
-            hasNecroticBomb: hasFocus && hasSpell("Necrotic Bomb"),
-            hasLifeTap: hasFocus && hasSpell("Life Tap"),
-            hasBloodInfusion: hasFocus && hasSpell("Blood Infusion")
+            hasNecroticBomb: hasSpell("Necrotic Bomb"),
+            hasLifeTap: hasSpell("Life Tap"),
+            hasBloodInfusion: hasSpell("Blood Infusion"),
+            hasBoneSpear: hasSpell("Bone Spear"),
+            hasDeadWeight: hasSpell("Dead Weight"),
+            hasPuppeteer: hasPuppeteer,
+            consumeText: consumeText,
+            consumeDisabled: consumeDisabled
         };
     }
 
@@ -694,6 +771,229 @@ this.render(false);
                 };
 
                 switch (action) {
+                    case "consume-thrall": {
+                        const necroTokens = actor.getActiveTokens();
+                        if (necroTokens.length > 0) {
+                            const necroToken = necroTokens[0];
+                            let distance = 999;
+                            if (typeof tokenDoc.object.distanceTo === "function") {
+                                distance = tokenDoc.object.distanceTo(necroToken);
+                            } else {
+                                const dx = Math.abs(tokenDoc.x - necroToken.x);
+                                const dy = Math.abs(tokenDoc.y - necroToken.y);
+                                distance = (Math.max(dx, dy) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
+                            }
+                            if (distance > 30) {
+                                ui.notifications.warn("That thrall is beyond 30 feet.");
+                                break;
+                            }
+                        }
+
+                        new Dialog({
+                            title: "Consume Thrall",
+                            content: `<p>Destroy <b>${tokenDoc.name}</b> to regain 1 Focus Point?</p>`,
+                            buttons: {
+                                consume: {
+                                    icon: '<i class="fas fa-skull"></i>',
+                                    label: "Consume",
+                                    callback: async () => {
+                                        await tokenDoc.delete();
+                                        await actor.setFlag("necromancer-thrall-helper", "consumeThrallUsed", true);
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        await actor.update({ "system.resources.focus.value": currentFocus + 1 });
+                                        
+                                        await ChatMessage.create({
+                                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                                            flavor: `<strong>Consume Thrall</strong>`,
+                                            content: `<p><b>${actor.name}</b> consumes the animus of <b>${tokenDoc.name}</b>, regaining 1 Focus Point (restricted to grave spells).</p>`
+                                        });
+                                    }
+                                },
+                                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                            },
+                            default: "consume"
+                        }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
+                        break;
+                    }
+                    case "dead-weight": {
+                        const spellRank = Math.ceil(necroLevel / 2);
+                        
+                        let exactDC = 10 + Math.floor(necroLevel * 1.5);
+                        if (actor.spellcasting) {
+                            const entries = typeof actor.spellcasting.contents === "function" ? actor.spellcasting.contents() : Array.from(actor.spellcasting);
+                            let maxDC = 0;
+                            for (const entry of entries) {
+                                const dcVal = entry.dc?.value || entry.statistic?.dc?.value || entry.system?.dc?.value;
+                                if (dcVal && dcVal > maxDC) maxDC = dcVal;
+                            }
+                            if (maxDC > 0) exactDC = maxDC;
+                        }
+                        if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) {
+                            exactDC = actor.system.attributes.classDC.dc.value;
+                        }
+
+                        let dwSpell = actor.items.find(i => ["spell", "feat", "action"].includes(i.type) && i.name === "Dead Weight");
+                        const spellSystemData = {
+                            level: { value: spellRank },
+                            traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
+                            tradition: { value: "divine" },
+                            defense: { save: { statistic: "fortitude", basic: false, dc: { value: exactDC } } }
+                        };
+
+                        if (!dwSpell) {
+                            const spellData = { name: "Dead Weight", type: "spell", img: "icons/magic/death/undead-zombie-glowing-green.webp", system: spellSystemData };
+                            const created = await actor.createEmbeddedDocuments("Item", [spellData]);
+                            dwSpell = created[0];
+                        } else {
+                            await dwSpell.update({ system: spellSystemData });
+                        }
+
+                        const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
+                        const gridDist = canvas.scene?.grid?.distance || 5;
+                        const gridSize = canvas.scene?.grid?.size || 100;
+                        const rangePixels = (15 / gridDist) * gridSize;
+
+                        const validTargets = Array.from(game.user.targets).filter(t => {
+                            const dist = Math.hypot(t.center.x - tokenCenter.x, t.center.y - tokenCenter.y);
+                            return dist <= rangePixels;
+                        });
+
+                        if (validTargets.length !== 1) {
+                            ui.notifications.warn("Dead Weight requires exactly one target selected on the canvas within 15 feet of the thrall.");
+                            break;
+                        }
+
+                        const targetToken = validTargets[0];
+
+                        new Dialog({
+                            title: "Dead Weight",
+                            content: `<p>Hurl <b>${tokenDoc.name}</b> at <b>${targetToken.name}</b> to fuse their flesh together?</p>`,
+                            buttons: {
+                                hurl: {
+                                    icon: '<i class="fas fa-meteor"></i>',
+                                    label: "Hurl",
+                                    callback: async () => {
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+                                        const targetsData = {};
+                                        targetsData[targetToken.document.id] = {
+                                            id: targetToken.document.id,
+                                            name: targetToken.document.name,
+                                            img: targetToken.document.texture.src,
+                                            hasRolled: false,
+                                            rollTotal: null,
+                                            degreeOfSuccess: null,
+                                            isHealing: false,
+                                            isImmune: false,
+                                            hasApplied: false
+                                        };
+
+                                        const templatePath = "modules/aoe-easy-resolve/templates/chat-card.hbs";
+                                        const htmlContent = await renderTemplate(templatePath, {
+                                            targets: Object.values(targetsData),
+                                            itemName: "Dead Weight",
+                                            saveType: "Fortitude",
+                                            saveDC: exactDC
+                                        });
+
+                                        await tokenDoc.delete();
+
+                                        await ChatMessage.create({
+                                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                                            content: htmlContent,
+                                            flags: {
+                                                "aoe-easy-resolve": {
+                                                    templateId: null,
+                                                    documentName: "ManualTarget",
+                                                    itemUuid: dwSpell.uuid,
+                                                    itemName: "Dead Weight",
+                                                    saveType: "fortitude",
+                                                    saveDC: exactDC,
+                                                    isBasicSave: false,
+                                                    targets: targetsData,
+                                                    hazardDamage: null,
+                                                    isReactive: false,
+                                                    originMessageId: null
+                                                }
+                                            }
+                                        });
+                                    }
+                                },
+                                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                            },
+                            default: "hurl"
+                        }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
+                        break;
+                    }
+                    case "bone-spear": {
+                        const spellRank = Math.ceil(necroLevel / 2);
+                        const damageDice = spellRank * 2;
+                        
+                        let exactDC = 10 + Math.floor(necroLevel * 1.5);
+                        if (actor.spellcasting) {
+                            const entries = typeof actor.spellcasting.contents === "function" ? actor.spellcasting.contents() : Array.from(actor.spellcasting);
+                            let maxDC = 0;
+                            for (const entry of entries) {
+                                const dcVal = entry.dc?.value || entry.statistic?.dc?.value || entry.system?.dc?.value;
+                                if (dcVal && dcVal > maxDC) maxDC = dcVal;
+                            }
+                            if (maxDC > 0) exactDC = maxDC;
+                        }
+                        if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) {
+                            exactDC = actor.system.attributes.classDC.dc.value;
+                        }
+
+                        let spearSpell = actor.items.find(i => i.type === "spell" && i.name === "Bone Spear");
+                        const spellSystemData = {
+                            level: { value: spellRank },
+                            traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
+                            tradition: { value: "divine" },
+                            area: { type: "line", value: 15 },
+                            defense: { save: { statistic: "reflex", basic: true, dc: { value: exactDC } } },
+                            damage: { "0": { formula: `${damageDice}d6`, type: "piercing" } }
+                        };
+
+                        if (!spearSpell) {
+                            const spellData = { name: "Bone Spear", type: "spell", img: "icons/magic/weapons/projectile-spear-bone.webp", system: spellSystemData };
+                            const created = await actor.createEmbeddedDocuments("Item", [spellData]);
+                            spearSpell = created[0];
+                        } else {
+                            await spearSpell.update({ system: spellSystemData });
+                        }
+
+                        // Override flags to ensure AOE Easy Resolve catches the exact math
+                        await spearSpell.setFlag("aoe-easy-resolve", "useCustomDamage", true);
+                        await spearSpell.setFlag("aoe-easy-resolve", "customDamage", `${damageDice}d6`);
+                        await spearSpell.setFlag("aoe-easy-resolve", "customDamageType", "piercing");
+                        await spearSpell.setFlag("aoe-easy-resolve", "useOverride", true);
+                        await spearSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
+                        await spearSpell.setFlag("aoe-easy-resolve", "saveType", "reflex");
+                        await spearSpell.setFlag("aoe-easy-resolve", "allyBaseEffect", "standard");
+                        await spearSpell.setFlag("aoe-easy-resolve", "enemyBaseEffect", "standard");
+
+                        new Dialog({
+                            title: "Bone Spear",
+                            content: `<p>Shatter <b>${tokenDoc.name}</b> into a 15-foot line of jagged bone for <b>${damageDice}d6 piercing</b> damage?</p>`,
+                            buttons: {
+                                fire: {
+                                    icon: '<i class="fas fa-location-arrow"></i>',
+                                    label: "Shatter & Fire",
+                                    callback: async () => {
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+                                        await tokenDoc.delete();
+                                        
+                                        // Push the spell to chat so you can draw the line from the template button
+                                        await spearSpell.toMessage(e);
+                                        ui.notifications.info("Draw your 15-foot line starting from the thrall's former space.");
+                                    }
+                                },
+                                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                            },
+                            default: "fire"
+                        }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
+                        break;
+                    }
                     case "charge": {
                         const spellRank = Math.ceil(necroLevel / 2);
                         let chargeDice = 1;
@@ -716,6 +1016,7 @@ this.render(false);
                                     icon: '<i class="fas fa-bomb"></i>',
                                     label: "Charge & Destroy",
                                     callback: async () => {
+
                                         await rollNativeStrike(e, true, chargeDice, spellRank);
                                     }
                                 }
@@ -783,6 +1084,8 @@ this.render(false);
                                     icon: '<i class="fas fa-tint"></i>',
                                     label: "Infuse",
                                     callback: async () => {
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const targetsData = {};
                                         targetsData[targetToken.document.id] = {
                                             id: targetToken.document.id,
@@ -894,6 +1197,8 @@ this.render(false);
                                     icon: '<i class="fas fa-radiation"></i>',
                                     label: "Detonate",
                                     callback: async () => {
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
                                         
                                         window.aoeEasyResolveCache = {
@@ -985,6 +1290,9 @@ this.render(false);
                                     icon: '<i class="fas fa-heart-broken"></i>',
                                     label: "Siphon",
                                     callback: async () => {
+
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const targetsData = {};
                                         targetsData[targetToken.document.id] = {
                                             id: targetToken.document.id,
@@ -1043,7 +1351,7 @@ this.render(false);
         const spawnBtns = html.querySelectorAll(".spawn-btn");
         spawnBtns.forEach(btn => {
             btn.addEventListener("click", async (e) => {
-                const count = parseInt(e.currentTarget.dataset.count, 10);
+                let count = parseInt(e.currentTarget.dataset.count, 10);
                 const actor = game.actors.get(this.necroId) || game.user.character;
 
                 if (!actor) {
@@ -1051,8 +1359,26 @@ this.render(false);
                     return;
                 }
 
-             // 1. Build the preset dropdown options
-             const presets = getThrallPresets(actor);
+                const hasPuppeteer = actor.items.some(i => i.system?.slug === "puppeteer");
+                if (hasPuppeteer) {
+                    const currentCombat = game.combat;
+                    const currentRound = currentCombat ? currentCombat.round : 0;
+                    const lastUsedRound = actor.getFlag("necromancer-thrall-helper", "proliferationRound");
+                    
+                    if (!currentCombat || lastUsedRound !== currentRound) {
+                        count += 1;
+                        if (currentCombat) {
+                            await actor.setFlag("necromancer-thrall-helper", "proliferationRound", currentRound);
+                        }
+                        await ChatMessage.create({
+                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                            content: `<p><strong>Thrall Proliferation!</strong> <b>${actor.name}</b> twists the magic to spawn an additional thrall this round.</p>`
+                        });
+                    }
+                }
+
+                const presets = getThrallPresets(actor);
+
                 let optionsHtml = `
                     <option value="default">(Default Thrall)</option>
                     <option value="random">(Random Family Member)</option>

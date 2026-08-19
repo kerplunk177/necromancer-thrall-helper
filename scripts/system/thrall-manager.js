@@ -2,7 +2,7 @@
 export function setupHooks() {
     console.log("Necromancer Thrall Helper | Thrall management hooks standing by.");
 
-    // The Auto-Refresh Hook
+
     const refreshDeck = (tokenDocument) => {
         const isThrall = tokenDocument.getFlag("necromancer-thrall-helper", "masterId");
         if (!isThrall) return;
@@ -17,7 +17,6 @@ export function setupHooks() {
     Hooks.on("createToken", refreshDeck);
     Hooks.on("deleteToken", refreshDeck);
 
-    // The MAP Combat Reset Hook
     const resetMap = (combat) => {
         for (const deck of foundry.applications.instances.values()) {
             if (deck.id === "thrall-command-deck" && deck.necroId) {
@@ -32,7 +31,7 @@ export function setupHooks() {
     Hooks.on("combatTurn", resetMap);
     Hooks.on("combatRound", resetMap);
 
-    // The Canvas-to-UI Sync Hook
+
     const syncHover = (token, hovered) => {
         const isThrall = token.document.getFlag("necromancer-thrall-helper", "masterId");
         if (!isThrall) return;
@@ -54,7 +53,6 @@ export function setupHooks() {
     Hooks.on("hoverToken", syncHover);
 }
 
-// Master list of standard adjectives for default and random pools
 const STANDARD_ADJECTIVES = [
     "Angry", "Soggy", "Vengeful", "Festering", "Hollow", 
     "Shivering", "Wrinkled", "Spiteful", "Damp", "Putrid", 
@@ -119,7 +117,7 @@ export async function prepareThrallPayload(necroActor, presetId = "default") {
         preset = customPresets.find(p => p.id === presetId) || defaultPreset;
     }
 
-    // --- ADJECTIVE RESOLUTION ---
+
     let finalName = preset.name;
     if (preset.adjectives && preset.adjectives.length > 0) {
         const randomAdjective = preset.adjectives[Math.floor(Math.random() * preset.adjectives.length)];
@@ -141,7 +139,7 @@ export async function prepareThrallPayload(necroActor, presetId = "default") {
 
     tokenData.disposition = 1;
 
-    // 1. Flag the Token itself for external modules and parsers
+
     tokenData.flags = foundry.utils.mergeObject(tokenData.flags || {}, {
         "necromancer-thrall-helper": {
             masterId: necroActor.id,
@@ -155,7 +153,7 @@ export async function prepareThrallPayload(necroActor, presetId = "default") {
         }
     });
 
-    // 2. Inject the master link and summoned traits into the Thrall's private Actor sheet
+
     const existingTraits = protoActor.system?.traits?.value || [];
     const newTraits = [...new Set([...existingTraits, "summoned", "minion"])];
 

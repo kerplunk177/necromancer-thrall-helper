@@ -45,18 +45,27 @@
                         <!-- Action Dropdown -->
                         <div class="form-group">
                             <select class="action-dropdown" name="action">
-                                <option value="strike">Strike</option>
-                                <option value="charge">Charge</option>
-                                {{#if ../hasNecroticBomb}}
-                                    <option value="explode">Necrotic Bomb</option>
-                                {{/if}}
-                                {{#if ../hasLifeTap}}
-                                    <option value="life-tap">Life Tap</option>
-                                {{/if}}
-                                {{#if ../hasBloodInfusion}}
-                                    <option value="blood-infusion">Blood Infusion</option>
-                                {{/if}}
-                            </select>
+    <option value="strike">Strike</option>
+    <option value="charge">Charge</option>
+    {{#if ../hasNecroticBomb}}
+        <option value="explode">Necrotic Bomb</option>
+    {{/if}}
+    {{#if ../hasLifeTap}}
+        <option value="life-tap">Life Tap</option>
+    {{/if}}
+    {{#if ../hasDeadWeight}}
+        <option value="dead-weight">Dead Weight</option>
+    {{/if}}
+    {{#if ../hasPuppeteer}}
+        <option value="consume-thrall" {{#if ../consumeDisabled}}disabled{{/if}}>{{../consumeText}}</option>
+    {{/if}}
+    {{#if ../hasBoneSpear}}
+        <option value="bone-spear">Bone Spear</option>
+    {{/if}}
+    {{#if ../hasBloodInfusion}}
+        <option value="blood-infusion">Blood Infusion</option>
+    {{/if}}
+</select>
                         </div>
 
                         <!-- Wide Action Buttons Row -->
