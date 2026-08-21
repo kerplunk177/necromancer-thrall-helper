@@ -2,7 +2,7 @@
   "id": "necromancer-thrall-helper",
   "title": "Necromancer Thrall Helper",
   "description": "A tactical command deck for managing PF2e Necromancer thralls, featuring dynamic scaling, GM socket spawning, and spatial proximity tracking.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "socket": true,
   "compatibility": {
     "minimum": "14",
@@ -48,6 +48,6 @@
     }
   ],
   "manifest": "https://raw.githubusercontent.com/kerplunk177/necromancer-thrall-helper/main/module.json",
-  "download": "https://github.com/kerplunk177/necromancer-thrall-helper/releases/download/1.0.1/module.zip",
+  "download": "https://github.com/kerplunk177/necromancer-thrall-helper/releases/download/1.0.2/module.zip",
   "flags": {}
 }
