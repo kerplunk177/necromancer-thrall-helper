@@ -13,13 +13,42 @@
         </div>
     </header>
 
-    <!-- Administrative Controls -->
-    <div class="roster-controls">
+  <div class="roster-controls">
         <button type="button" class="edit-portfolio-btn" title="Edit Thrall Portfolio">
             <i class="fas fa-book-dead"></i> Edit Thrall Portfolio
         </button>
+        {{#if hasHallowedEarth}}
+        <button type="button" class="hallowed-btn" title="Toggle Hallowed Earth">
+            <i class="fas fa-sun"></i> {{#if isHallowedActive}}Dismiss Hallowed Earth{{else}}Hallowed Earth{{/if}}
+        </button>
+        {{/if}}
+        {{#if hasCorruptedGround}}
+        <button type="button" class="corrupted-btn" title="Toggle Corrupted Ground">
+            <i class="fas fa-moon"></i> {{#if isCorruptedActive}}Dismiss Corrupted Ground{{else}}Corrupted Ground{{/if}}
+        </button>
+        {{/if}}
+        
+        {{#if hasCollateralReinforcement}}
+        <button type="button" class="collateral-btn" title="Reinforce Thralls">
+            <i class="fas fa-shield-alt"></i> Collateral Reinforcement
+        </button>
+        {{/if}}
+        {{#if hasReclaimPower}}
+        <button type="button" class="reclaim-btn" title="Reclaim Power">
+            <i class="fas fa-heart-crack"></i> Reclaim Power
+        </button>
+        {{/if}}
     </div>
-
+{{#if activeHordeCount}}
+    <div class="horde-controls" style="display: flex; gap: 5px; margin-top: 10px;">
+        <button type="button" class="sustain-horde-btn" title="Move Horde">
+            <i class="fas fa-arrows-alt"></i> Sustain (Move)
+        </button>
+        <button type="button" class="dismiss-horde-btn" title="Dismiss Horde">
+            <i class="fas fa-ban"></i> Dismiss Horde
+        </button>
+    </div>
+    {{/if}}
     <!-- Scrollable Roster -->
     <section class="active-thralls-list">
         {{#if activeThralls.length}}
@@ -50,8 +79,26 @@
     {{#if ../hasNecroticBomb}}
         <option value="explode">Necrotic Bomb</option>
     {{/if}}
+    {{#if ../hasZombieHorde}}
+        <option value="zombie-horde">Zombie Horde</option>
+    {{/if}}
+    {{#if ../hasDeathlyScream}}
+        <option value="deathly-scream">Deathly Scream</option>
+    {{/if}}
     {{#if ../hasLifeTap}}
         <option value="life-tap">Life Tap</option>
+    {{/if}}
+    {{#if ../hasMuscleBarrier}}
+        <option value="muscle-barrier">Muscle Barrier</option>
+    {{/if}}
+    {{#if ../hasSongOfTheSoul}}
+        <option value="song-of-the-soul">Song of the Soul</option>
+    {{/if}}
+    {{#if ../hasBonyBarrage}}
+        <option value="bony-barrage">Bony Barrage</option>
+    {{/if}}
+    {{#if ../hasBoneBurst}}
+        <option value="bone-burst">Bone Burst</option>
     {{/if}}
     {{#if ../hasDeadWeight}}
         <option value="dead-weight">Dead Weight</option>
@@ -85,7 +132,6 @@
         {{/if}}
     </section>
 
-    <!-- Static Footer -->
     <footer>
         <button type="button" class="spawn-btn" data-count="1">
             <i class="fas fa-ghost"></i> Spawn 1
@@ -93,5 +139,10 @@
         <button type="button" class="spawn-btn" data-count="2">
             <i class="fas fa-skulls"></i> Spawn 2
         </button>
+        {{#if hasBloodyTendrils}}
+        <button type="button" class="conjure-tendrils-btn" data-count="{{tendrilCount}}">
+            <i class="fas fa-biohazard"></i> Bloody Tendrils ({{tendrilCount}})
+        </button>
+        {{/if}}
     </footer>
 </div>
