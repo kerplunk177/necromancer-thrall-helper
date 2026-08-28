@@ -4,11 +4,9 @@ async function requestSpawn(payload) {
 
     await canvas.pan({ x: payload.x, y: payload.y, duration: 400 });
 
-
     if (canvas.ping) {
         canvas.ping({ x: payload.x, y: payload.y });
     }
-
 
     const gridSize = canvas.grid.size;
     const highlight = new PIXI.Graphics();
@@ -53,10 +51,23 @@ async function requestSpawn(payload) {
     const spawnData = foundry.utils.mergeObject(payload, {
         x: payload.x,
         y: payload.y,
+        elevation: (payload.elevation || 0) + 1,
         hidden: false
     });
 
-    return await scene.createEmbeddedDocuments("Token", [spawnData]);
+    const createdTokens = await scene.createEmbeddedDocuments("Token", [spawnData]);
+    
+    // Clean PIXI layer re-ordering to pop it to the visual top
+    if (createdTokens && createdTokens.length > 0) {
+        setTimeout(() => {
+            const tokenObj = canvas.tokens.get(createdTokens[0].id);
+            if (tokenObj && tokenObj.parent) {
+                tokenObj.parent.addChild(tokenObj);
+            }
+        }, 100);
+    }
+
+    return createdTokens;
 }
 
 export const setupSocket = () => {
@@ -73,8 +84,23 @@ export async function executeSpawn(payload) {
     if (game.user.isGM) {
         const scene = game.scenes.active;
         if (!scene) return;
-        const spawnData = foundry.utils.mergeObject(payload, { x: payload.x, y: payload.y, hidden: false });
-        return await scene.createEmbeddedDocuments("Token", [spawnData]);
+        const spawnData = foundry.utils.mergeObject(payload, { 
+            x: payload.x, 
+            y: payload.y, 
+            elevation: (payload.elevation || 0) + 1, 
+            hidden: false 
+        });
+        const createdTokens = await scene.createEmbeddedDocuments("Token", [spawnData]);
+        
+        if (createdTokens && createdTokens.length > 0) {
+            setTimeout(() => {
+                const tokenObj = canvas.tokens.get(createdTokens[0].id);
+                if (tokenObj && tokenObj.parent) {
+                    tokenObj.parent.addChild(tokenObj);
+                }
+            }, 100);
+        }
+        return createdTokens;
     } else {
         if (!socketlibSocket) {
             ui.notifications.error("Socketlib connection not established.");
