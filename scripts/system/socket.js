@@ -70,11 +70,35 @@ async function requestSpawn(payload) {
     return createdTokens;
 }
 
+async function deleteTokenAsGM(tokenId) {
+    const scene = game.scenes.active;
+    if (!scene) return;
+    const tokenDoc = scene.tokens.get(tokenId);
+    if (tokenDoc) await tokenDoc.delete();
+}
+
+async function createHazardAsGM(regionData, drawingData) {
+    const scene = game.scenes.active;
+    if (!scene) return;
+    
+    const [region] = await scene.createEmbeddedDocuments("Region", [regionData]);
+    let drawing = null;
+    
+    if (drawingData) {
+        const [createdDrawing] = await scene.createEmbeddedDocuments("Drawing", [drawingData]);
+        drawing = createdDrawing;
+    }
+    
+    return { regionId: region?.id, drawingId: drawing?.id };
+}
+
 export const setupSocket = () => {
     if (globalThis.socketlib) {
         socketlibSocket = globalThis.socketlib.registerModule("necromancer-thrall-helper");
         if (socketlibSocket) {
             socketlibSocket.register("requestSpawn", requestSpawn);
+            socketlibSocket.register("deleteTokenAsGM", deleteTokenAsGM);
+            socketlibSocket.register("createHazardAsGM", createHazardAsGM);
         }
     }
     return !!socketlibSocket;
@@ -107,5 +131,40 @@ export async function executeSpawn(payload) {
             return;
         }
         return await socketlibSocket.executeAsGM("requestSpawn", payload);
+    }
+}
+export async function executeDelete(tokenId) {
+    if (game.user.isGM) {
+        const tokenDoc = canvas.scene?.tokens.get(tokenId);
+        if (tokenDoc) await tokenDoc.delete();
+    } else {
+        if (!socketlibSocket) {
+            ui.notifications.error("Socketlib connection not established.");
+            return;
+        }
+        await socketlibSocket.executeAsGM("deleteTokenAsGM", tokenId);
+    }
+}
+export async function executeHazard(regionData, drawingData) {
+    if (game.user.isGM) {
+        return await createHazardAsGM(regionData, drawingData);
+    } else {
+        if (!socketlibSocket) {
+            ui.notifications.error("Socketlib connection not established.");
+            return;
+        }
+        return await socketlibSocket.executeAsGM("createHazardAsGM", regionData, drawingData);
+    }
+}
+
+export async function executeDamage(tokenId, rollJSON) {
+    if (game.user.isGM) {
+        return await applyDamageAsGM(tokenId, rollJSON);
+    } else {
+        if (!socketlibSocket) {
+            ui.notifications.error("Socketlib connection not established.");
+            return;
+        }
+        return await socketlibSocket.executeAsGM("applyDamageAsGM", tokenId, rollJSON);
     }
 }

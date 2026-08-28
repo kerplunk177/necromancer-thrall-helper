@@ -45,7 +45,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
             "Screaming", "Moth-Eaten", "Bitter", "Rancid", "Haunted"
         ];
 
-        // 1. Delete Thrall Logic
         const deleteBtns = html.querySelectorAll(".delete-preset-btn");
         deleteBtns.forEach(btn => {
             btn.addEventListener("click", async (e) => {
@@ -62,7 +61,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
             });
         });
 
-        // 2. Edit Thrall Logic
         const editBtns = html.querySelectorAll(".edit-preset-btn");
         editBtns.forEach(btn => {
             btn.addEventListener("click", (e) => {
@@ -101,8 +99,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
             });
         });
-
-        // 3. Native File Picker Hook
         const filePickerBtn = html.querySelector(".file-picker-btn");
         if (filePickerBtn) {
             filePickerBtn.addEventListener("click", (e) => {
@@ -115,8 +111,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 }).render(true);
             });
         }
-
-        // 4. Select All Adjectives Toggle
         const selectAllBtn = html.querySelector("#select-all-adj-btn");
         if (selectAllBtn) {
             selectAllBtn.addEventListener("click", (e) => {
@@ -128,20 +122,34 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 selectAllBtn.textContent = allChecked ? "Select All" : "Deselect All";
             });
         }
-
         // 5. Save / Add Thrall Logic
         const saveBtn = html.querySelector("#save-thrall-btn");
         if (saveBtn) {
             saveBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
                 const name = html.querySelector("#new-thrall-name").value.trim();
-                const img = html.querySelector("#new-thrall-img").value.trim();
+                let img = html.querySelector("#new-thrall-img").value.trim();
                 const customAdjRaw = html.querySelector("#new-thrall-custom-adj").value.trim();
                 const isUnique = html.querySelector("#new-thrall-unique").checked;
 
-                if (!name || !img) {
-                    ui.notifications.warn("Both name and image path are required.");
+                if (!name) {
+                    ui.notifications.warn("A thrall name is required.");
                     return;
+                }
+
+                // If image is blank or inaccessible, fall back to default icon
+                if (!img) {
+                    img = "systems/pf2e/icons/default-icons/npc.svg";
+                } else {
+                    try {
+                        const response = await fetch(img, { method: "HEAD" });
+                        if (!response.ok) {
+                            img = "systems/pf2e/icons/default-icons/npc.svg";
+                        }
+                    } catch (err) {
+                        // Catches permission blocks, CORS issues, or bad paths safely
+                        img = "systems/pf2e/icons/default-icons/npc.svg";
+                    }
                 }
 
                 const checkedCheckboxes = html.querySelectorAll("input[name='adjective']:checked");

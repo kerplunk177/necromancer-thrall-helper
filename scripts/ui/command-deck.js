@@ -1,14 +1,15 @@
 import { prepareThrallPayload, getThrallPresets } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
-import { executeSpawn } from "../system/socket.js";
+import { executeSpawn, executeDelete, executeHazard, executeDamage } from "../system/socket.js";
+
+
+
+
+
 Hooks.on("hoverToken", (token, hovered) => {
-    // Only search if the token actually exists and has an ID
     if (!token?.id) return;
-    
-    // Safely query the DOM for any row matching the hovered token
     const rows = document.querySelectorAll(`.thrall-row[data-token-id="${token.id}"]`);
-    
-    // Toggle the highlight class
+
     rows.forEach(row => {
         if (hovered) {
             row.classList.add("canvas-hover");
@@ -256,16 +257,13 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
         /thick\s*skin/i.test(i.name) || i.slug === "thick-skin"
     );
 
-    if (thickSkinItem) {
+    if (thickSkinItem && !window.SuppressThickSkin) {
+        if (window.NecroThrallThickSkinLock) return;
+        window.NecroThrallThickSkinLock = true;
+        setTimeout(() => { window.NecroThrallThickSkinLock = false; }, 2000);
+
         console.log("Necromancer Helper | Thick Skin feat detected on master.");
-        const combatRoundKey = game.combat ? `${game.combat.id}_${game.combat.round}` : `ooc_${Date.now()}`;
-        const lastTriggered = masterActor.getFlag("necromancer-thrall-helper", "thickSkinRound");
-
-        if (game.combat && lastTriggered === combatRoundKey) {
-            console.log("Necromancer Helper | Thick Skin already triggered this combat round.");
-            return;
-        }
-
+        
         let necroToken = masterActor.getActiveTokens()[0];
         if (!necroToken) {
             necroToken = canvas.tokens.placeables.find(t => t.actor?.id === masterActor.id);
@@ -332,13 +330,21 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
             y: necroToken.center.y,
             fillColor: "#84cc16",
             flags: {
-                "necromancer-thrall-helper": { source: "thick-skin" }
+                "necromancer-thrall-helper": { source: "thick-skin" },
+                "pf2e": { origin: { uuid: thickSkinItem.uuid } },
+                "aoe-easy-resolve": { originItemUuid: thickSkinItem.uuid }
             }
         };
 
         await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [templateData]);
+
+        setTimeout(() => {
+            if (window.aoeEasyResolveCache?.name === "Thick Skin") {
+                window.aoeEasyResolveCache = null;
+            }
+        }, 500);
     }
-});
+})
 
 Hooks.on("createItem", async (item, options, userId) => {
     if (game.user.id !== userId) return;
@@ -405,7 +411,6 @@ Hooks.on("createItem", async (item, options, userId) => {
 
             await actor.createEmbeddedDocuments("Item", [puppetEffect]);
 
-            // DYNAMIC POLLING LOOP: Wait for PF2e to process the Max HP buff
             for (let attempts = 0; attempts < 20; attempts++) {
                 if (actor.system.attributes.hp.max >= 200) break;
                 await new Promise(resolve => setTimeout(resolve, 100));
@@ -843,7 +848,7 @@ Hooks.on("renderChatMessage", (message, html) => {
             }
         };
 
-        const [createdRegion] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+        const [createdRegion] = await executeHazard(regionData, drawingData);
         await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
 
 
@@ -885,11 +890,22 @@ Hooks.once("ready", () => {
         if (name.includes("Thick Skin")) {
             payload.itemName = "Thick Skin";
             payload.hazardDamage = null;
-            const casterAlliance = payload.caster?.alliance || payload.originItem?.actor?.alliance || "party";
+            
+        
+            const casterAlliance = payload.caster?.system?.details?.alliance 
+                                || payload.originItem?.actor?.system?.details?.alliance 
+                                || "party";
+                                
             for (const [tokenId, targetData] of Object.entries(payload.targets)) {
                 const token = canvas.tokens.get(tokenId);
-                const isEnemy = token?.actor?.alliance ? token.actor.alliance !== casterAlliance : !token?.actor?.hasPlayerOwner;
-                if (!isEnemy || targetData.isImmune) delete payload.targets[tokenId];
+                if (!token?.actor) continue;
+                
+                const targetAlliance = token.actor.system?.details?.alliance || (token.actor.hasPlayerOwner ? "party" : "opposition");
+                const isEnemy = targetAlliance !== casterAlliance;
+                
+                if (!isEnemy || targetData.isImmune) {
+                    delete payload.targets[tokenId];
+                }
             }
         }
         
@@ -1683,7 +1699,6 @@ Hooks.on("preDeleteToken", (tokenDoc) => {
         const combatants = game.combat.combatants.filter(c => c.tokenId === tokenDoc.id);
         if (combatants.length > 0) {
             const ids = combatants.map(c => c.id);
-            // Quietly extract them from the turn order before they vaporize
             game.combat.deleteEmbeddedDocuments("Combatant", ids).catch(err => {
                 console.error("Necromancer Helper | Safe-Delete Interceptor caught a snag:", err);
             });
@@ -1692,7 +1707,6 @@ Hooks.on("preDeleteToken", (tokenDoc) => {
 });
 
 
-// --- BLOOD POOL: GLOBAL ABSORPTION CONTROLLER ---
 globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
 
 globalThis.NecroThrallHelper.declinedPools = globalThis.NecroThrallHelper.declinedPools || new Set();
@@ -1701,7 +1715,7 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
     const actor = tokenObj.actor;
     if (!actor) return;
 
-    // Verify the creature is an ally (party member or friendly disposition)
+
     const alliance = actor.system?.details?.alliance || actor.alliance;
     const isAlly = alliance === "party" || tokenObj.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY;
     if (!isAlly) return;
@@ -1711,7 +1725,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
     const masterId = regionDoc.getFlag("necromancer-thrall-helper", "masterId");
     const masterActor = game.actors.get(masterId);
 
-    // Prevent prompt loops on the same turn movement if previously declined
     const lockoutKey = `${tokenObj.id}_${poolId}`;
     if (globalThis.NecroThrallHelper.declinedPools.has(lockoutKey)) return;
 
@@ -1746,7 +1759,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                         content: `<p><b>${tokenObj.name}</b> drinks the infused essence, recovering <b>${actualHealed} Hit Points</b>!</p>`
                     });
 
-                    // Delete the Region and its paired Drawing
                     if (canvas.scene) {
                         await regionDoc.delete();
                         const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
@@ -1760,7 +1772,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                 label: "Leave It",
                 callback: () => {
                     globalThis.NecroThrallHelper.declinedPools.add(lockoutKey);
-                    // Clear lockout after 5 seconds so they can absorb if they re-enter or start a turn there
                     setTimeout(() => {
                         globalThis.NecroThrallHelper.declinedPools.delete(lockoutKey);
                     }, 5000);
@@ -1771,15 +1782,12 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
     }).render(true);
 };
 Hooks.on("createChatMessage", async (message) => {
-    // 1. Bulletproof author check to prevent duplicate dialogs across clients
     if (message.author?.id !== game.user.id) return;
     
-    // 2. Catch the PF2e Damage Roll
     const pf2eFlags = message.flags?.pf2e || {};
     const context = pf2eFlags.context || {};
     if (context.type !== "damage-roll") return;
 
-    // 3. Verify the Draining Strike toggle is hot in the roll options
     const rollOptions = context.options || [];
     const hasDrainingStrike = rollOptions.some(o => o === "draining-strike" || o.startsWith("draining-strike:"));
     if (!hasDrainingStrike) return;
@@ -1788,7 +1796,6 @@ Hooks.on("createChatMessage", async (message) => {
     const actor = game.actors.get(actorId);
     if (!actor) return;
 
-    // 4. Scrape the required thrall count directly from the Feat's internal memory
     let requiredThralls = 1;
     const dsFeat = actor.items.find(i => i.slug === "draining-strike" || i.name === "Draining Strike");
     
@@ -1799,7 +1806,6 @@ Hooks.on("createChatMessage", async (message) => {
         }
     }
 
-    // 5. Scrape the raw Spirit damage from the roll instances
     let rawSpiritDamage = 0;
     if (message.rolls && message.rolls.length > 0) {
         const roll = message.rolls[0];
@@ -1814,7 +1820,6 @@ Hooks.on("createChatMessage", async (message) => {
 
     if (rawSpiritDamage === 0) return;
 
-    // 6. Gather target token and automatically apply exact Weakness / Resistance math
     let targetTokenId = context.target?.token; 
     let targetToken = canvas.tokens.get(targetTokenId);
     if (!targetToken && game.user.targets.size > 0) {
@@ -1845,7 +1850,6 @@ Hooks.on("createChatMessage", async (message) => {
         return ui.notifications.info("Draining Strike hit, but the target resisted all Spirit damage. No healing granted.");
     }
 
-    // 7. Gather valid thralls (Canvas Placeables, strictly avoiding Database Documents)
     let necroToken = canvas.tokens.get(message.speaker?.token) || actor.getActiveTokens()[0];
     const gridDist = canvas.scene?.grid?.distance || 5;
 
@@ -1855,7 +1859,6 @@ Hooks.on("createChatMessage", async (message) => {
         let distToNecro = 999;
         let distToTarget = 999;
 
-        // Perfect PF2e Chebyshev Distance Math
         if (necroToken) {
             const dx = Math.abs(necroToken.x - t.x);
             const dy = Math.abs(necroToken.y - t.y);
@@ -1868,7 +1871,6 @@ Hooks.on("createChatMessage", async (message) => {
             distToTarget = (Math.max(dx, dy) / canvas.grid.size) * gridDist;
         }
 
-        // Must be within 10 feet of either the caster OR the target
         return distToNecro <= 10 || distToTarget <= 10;
     });
 
@@ -1876,7 +1878,6 @@ Hooks.on("createChatMessage", async (message) => {
         return ui.notifications.error(`Draining Strike requires ${requiredThralls} thrall(s) within 10ft of you or the target, but only found ${availableThralls.length}.`);
     }
 
-    // 8. Prompt the user to select the sacrifices
     let checkboxes = "";
     availableThralls.forEach((t, index) => {
         checkboxes += `<div style="display: flex; align-items: center; margin-bottom: 5px;">
@@ -1916,12 +1917,10 @@ Hooks.on("createChatMessage", async (message) => {
                         return ui.notifications.warn(`You must select exactly ${requiredThralls} thrall(s). Action aborted.`);
                     }
 
-                    // Delete the physical thralls off the canvas
                     const tokensToDelete = selectedIds.map(id => canvas.tokens.get(id));
                     const names = tokensToDelete.map(t => t.name).join(", ");
                     for (const t of tokensToDelete) await t.document.delete();
 
-                    // Apply the Healing
                     const currentHP = actor.system.attributes.hp.value;
                     const maxHP = actor.system.attributes.hp.max;
                     const actualHealed = Math.min(maxHP - currentHP, spiritHeal);
@@ -1953,7 +1952,6 @@ Hooks.on("createChatMessage", async (message) => {
         }
     }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
 });
-// --- BLOSSOMING GORE: SPROUT BUTTON LISTENER ---
 Hooks.on("renderChatMessage", (message, html) => {
     const $html = html instanceof jQuery ? html : $(html);
     
@@ -1968,7 +1966,6 @@ Hooks.on("renderChatMessage", (message, html) => {
         const attacker = game.user.character || canvas.tokens.controlled[0]?.actor;
         if (!attacker) return ui.notifications.warn("No Necromancer found to command the thralls!");
 
-        // Tap into your native preset system
         const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
         if (presets.length === 0) return ui.notifications.warn("No thrall presets found.");
 
@@ -2079,7 +2076,6 @@ Hooks.on("renderChatMessage", (message, html) => {
 
                             const presetId = selections[currentSpawnIndex];
                             
-                            // Call your native spawning logic
                             const basePayload = await prepareThrallPayload(attacker, presetId);
                             if (!basePayload) { cleanUp(); return; }
 
@@ -2100,7 +2096,7 @@ Hooks.on("renderChatMessage", (message, html) => {
                                 canvas.stage.once("pointerdown", interactionHandler);
                             } else {
                                 cleanUp();
-                                $btn.remove(); // Nuke the button so you don't double dip
+                                $btn.remove(); 
                                 ui.notifications.info("All blood thralls sprouted.");
                             }
                         };
@@ -2114,12 +2110,9 @@ Hooks.on("renderChatMessage", (message, html) => {
         }).render(true);
     });
 });
-// --- MAIN RENDER CHAT MESSAGE HOOK ---
-// --- MAIN RENDER CHAT MESSAGE HOOK ---
 Hooks.on("renderChatMessage", (message, html) => {
     const $html = html instanceof jQuery ? html : $(html);
 
-    // --- 1. DESPERATE REVIVAL: TRIGGER EXECUTION ---
     $html.find(".desperate-revival-trigger-btn").off("click").on("click", async (e) => {
         e.preventDefault();
         const $btn = $(e.currentTarget);
@@ -2142,7 +2135,6 @@ Hooks.on("renderChatMessage", (message, html) => {
         const unconscious = necroActor.getCondition?.("unconscious");
         if (unconscious) await unconscious.delete();
 
-        // DYNAMIC POLLING LOOP: Wait up to 2 seconds for PF2e to auto-apply Wounded
         for (let attempts = 0; attempts < 20; attempts++) {
             const currentWoundedCond = necroActor.getCondition?.("wounded");
             if ((currentWoundedCond?.value || 0) > preWounded) {
@@ -2236,8 +2228,7 @@ Hooks.on("renderChatMessage", (message, html) => {
     const pf2eContext = message.flags?.pf2e?.context;
     if (pf2eContext?.type === "attack-roll" && pf2eContext?.outcome === "criticalSuccess") {
         const attackerTokenId = message.speaker?.token;
-        const attackerToken = canvas.tokens.get(attackerTokenId);
-        // Safely fallback to token actor so players aren't blinded by unlinked NPCs
+        const attackerToken = canvas?.tokens?.get(attackerTokenId);
         const attacker = attackerToken?.actor || game.actors.get(message.speaker?.actor);
 
         if (!attacker) return;
@@ -2358,7 +2349,6 @@ Hooks.on("renderChatMessage", (message, html) => {
                                         const basePayload = await prepareThrallPayload(attacker, presetId);
                                         if (!basePayload) return;
 
-                                        // Ensure explicit ownership for the player
                                         const ownerIds = Object.keys(attacker.ownership || {}).filter(k => attacker.ownership[k] === 3 && k !== "default");
                                         const newOwnership = { default: 0 };
                                         ownerIds.forEach(id => newOwnership[id] = 3);
@@ -2415,7 +2405,6 @@ Hooks.on("renderChatMessage", (message, html) => {
         }
     }
 
-    // --- 3. AOE EASY RESOLVE CARDS LOGIC ---
     const itemName = message.flags?.["aoe-easy-resolve"]?.itemName || message.flavor || "";
     const msgContent = message.content || "";
     const isResolution = msgContent.includes("Resolution Summary") || message.flags?.["aoe-easy-resolve"]?.isResolution;
@@ -2427,7 +2416,6 @@ Hooks.on("renderChatMessage", (message, html) => {
     
     if (!isErasCard && !isBarrageCard && !isHarmCard && !isTsunamiCard) return;
 
-    // SINGLE CASTER ID RESOLUTION (Prevents Syntax Error)
     let casterId = message.speaker?.actor;
     const aoeItemUuid = message.flags?.["aoe-easy-resolve"]?.itemUuid || message.flags?.["aoe-easy-resolve"]?.originItemUuid;
     if (!casterId && aoeItemUuid && aoeItemUuid.includes("Actor.")) {
@@ -2455,7 +2443,6 @@ Hooks.on("renderChatMessage", (message, html) => {
         }
     };
 
-    // --- FLESH TSUNAMI LOGIC ---
     if (isTsunamiCard) {
         const hasLimbs = message.getFlag("necromancer-thrall-helper", "limbsActivated");
         const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
@@ -2549,7 +2536,7 @@ Hooks.on("renderChatMessage", (message, html) => {
         }
     }
 
-    // --- NECROTIC BOMB LOGIC ---
+    // --- NECROTIC BOMB INJECTION ---
     if (isErasCard) {
         if ($html.find('#necro-bomb-style').length === 0) {
             $html.prepend(`
@@ -2568,10 +2555,14 @@ Hooks.on("renderChatMessage", (message, html) => {
         $html.find('[data-token-id]').each((i, el) => {
             const $row = $(el);
             const tokenId = $row.attr('data-token-id');
-            if (!tokenId || $row.find('.necro-type-toggle').length > 0) return;
+            if (!tokenId) return;
 
             const targetToken = canvas?.tokens?.get(tokenId);
             if (!targetToken?.actor) return;
+
+            // Rip out the old elements so they rebuild cleanly on toggle
+            $row.find('.necro-type-toggle').remove();
+            $row.find('.no-save-badge').remove();
 
             const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
             const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
@@ -2608,13 +2599,13 @@ Hooks.on("renderChatMessage", (message, html) => {
                 e.stopPropagation();
                 const $btn = $(e.currentTarget);
                 const type = $btn.attr('data-type');
-                const tokenId = $btn.parent().attr('data-token-id');
+                const tokenId = $btn.closest('.necro-type-toggle').attr('data-token-id');
                 await message.setFlag("necromancer-thrall-helper", `dmgType_${tokenId}`, type);
             });
         }
     }
 
-    // --- INVERT HARM LOGIC ---
+    // --- INVERT HARM INJECTION ---
     if (isHarmCard) {
         const actor = game.actors.get(casterId);
         if (!actor) return;
@@ -2643,10 +2634,14 @@ Hooks.on("renderChatMessage", (message, html) => {
         $html.find('[data-token-id]').each((i, el) => {
             const $row = $(el);
             const tokenId = $row.attr('data-token-id');
-            if (!tokenId || $row.find('.harm-type-toggle').length > 0) return;
+            if (!tokenId) return;
 
             const targetToken = canvas?.tokens?.get(tokenId);
             if (!targetToken?.actor) return;
+
+            // Rip out the old elements so they rebuild cleanly on toggle
+            $row.find('.harm-type-toggle').remove();
+            $row.find('.aoe-heal-badge').remove();
 
             const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
             const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
@@ -2692,7 +2687,7 @@ Hooks.on("renderChatMessage", (message, html) => {
                 e.stopPropagation();
                 const $btn = $(e.currentTarget);
                 const type = $btn.attr('data-type');
-                const tokenId = $btn.parent().attr('data-token-id');
+                const tokenId = $btn.closest('.harm-type-toggle').attr('data-token-id');
                 
                 await message.setFlag("necromancer-thrall-helper", `harmState_${tokenId}`, type);
             });
@@ -2958,7 +2953,6 @@ Hooks.on("pf2e.endTurn", async (combatant, combat, userId) => {
                     speaker: ChatMessage.getSpeaker({ actor: foe.actor, token: foe }),
                     flavor: `<strong>Reanimated Decay</strong><br>The unstable corpse rots rapidly.`
                 });
-                // Pass the bypass flag so your custom interceptors ignore this damage
                 await foe.actor.applyDamage({ damage: roll, token: foe, _necroBombProcessed: true });
             }
         }
@@ -3190,7 +3184,6 @@ Hooks.on("pf2e.startTurn", async (combatant, combat, userId) => {
 Hooks.on("createToken", async (tokenDoc, options, userId) => {
     if (game.user.id !== userId) return;
 
-    // DYNAMIC POLLING LOOP: Wait up to 2 seconds for the server to attach the actor
     let actor = null;
     for (let attempts = 0; attempts < 20; attempts++) {
         actor = tokenDoc.actor;
@@ -3198,7 +3191,6 @@ Hooks.on("createToken", async (tokenDoc, options, userId) => {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     
-    // If they have 2000+ ping and it still fails, abort safely
     if (!actor) return;
 
     let masterId = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") || actor.getFlag("pf2e", "master")?.id;
@@ -3215,7 +3207,6 @@ Hooks.on("createToken", async (tokenDoc, options, userId) => {
 
     if (!isCustomThrall && !isNativeSummon) return;
 
-    // --- THRALL TEAMWORK PING ---
     const hasTeamwork = masterActor.items.some(i => i.name === "Thrall Teamwork");
     if (hasTeamwork) {
         const currentCombat = game.combat;
@@ -3420,7 +3411,6 @@ Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
 
     // --- 1. Song of the Soul Distance Tether ---
     if (canvas.scene) {
-        // A. Did the recipient move?
         if (tokenDoc.actor) {
             const recipientEffects = tokenDoc.actor.items.filter(i => i.name === "Effect: Song of the Soul (Recipient)");
             for (const effect of recipientEffects) {
@@ -3455,7 +3445,6 @@ Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
             }
         }
 
-        // B. Did the instrument move?
         const isInstrument = tokenDoc.actor?.items.some(i => i.name === "Effect: Song Instrument");
         if (isInstrument) {
             const iCenterX = (changes.x !== undefined ? changes.x : tokenDoc.x) + (tokenDoc.width * gridSize) / 2;
@@ -3525,7 +3514,6 @@ Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
 Hooks.on("preCreateToken", (tokenDoc, data, options, userId) => {
     if (game.user.id !== userId) return;
 
-    // Failsafe: Prevent the GM from accidentally branding enemy tokens while building encounters
     if (game.user.isGM && tokenDoc.disposition !== CONST.TOKEN_DISPOSITIONS.FRIENDLY) return;
 
     let masterActor = game.user.character;
@@ -3611,8 +3599,9 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
             const isUnaffected = (newType === 'vitality' && !negHeal) || (newType === 'void' && negHeal);
             
             if (targets[tokenId]) {
-                if (targets[tokenId].isImmune !== isUnaffected) msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isUnaffected;
-                if (targets[tokenId].isHealing !== false) msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = false; // Never hide save natively due to healing
+                // Forcefully overwrite both to guarantee the UI syncs
+                msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isUnaffected;
+                msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = false; 
             }
         }
         
@@ -3629,8 +3618,11 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
             if (newState === "heal") isHealing = true;
             
             if (targets[tokenId]) {
-                if (targets[tokenId].isHealing !== isHealing) msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = isHealing;
-                if (isHealing && targets[tokenId].isImmune !== false) msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = false;
+                // Forcefully overwrite both to guarantee the UI syncs
+                msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = isHealing;
+                if (isHealing) {
+                    msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = false;
+                }
             }
         }
     }
@@ -3638,128 +3630,12 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
     if (!foundry.utils.isEmpty(msgUpdates)) {
         await message.update(msgUpdates, { necroHelperProcessed: true });
         
-        const updatedMessage = game.messages.get(message.id);
-        const aoeData = updatedMessage.flags["aoe-easy-resolve"];
-        if (aoeData) {
-            const templatePath = "modules/aoe-easy-resolve/templates/chat-card.hbs";
-            const formattedSaveType = aoeData.saveType ? aoeData.saveType.charAt(0).toUpperCase() + aoeData.saveType.slice(1) : "";
-            
-            const dosMap = { "criticalSuccess": { label: "Crit Success", color: "#008000" }, "success": { label: "Success", color: "#0000ff" }, "failure": { label: "Failure", color: "#ff8c00" }, "criticalFailure": { label: "Crit Failure", color: "#ff0000" } };
-            const formattedTargets = Object.values(aoeData.targets).map(t => {
-                let dData = { ...t };
-                if (t.degreeOfSuccess) { dData.dosColor = dosMap[t.degreeOfSuccess]?.color || "#000000"; dData.dosLabel = dosMap[t.degreeOfSuccess]?.label || t.degreeOfSuccess; }
-                if (t.unadjustedDegreeOfSuccess) { dData.unadjustedDosLabel = dosMap[t.unadjustedDegreeOfSuccess]?.label || t.unadjustedDegreeOfSuccess; dData.showUnadjusted = t.degreeOfSuccess !== t.unadjustedDegreeOfSuccess; }
-                return dData;
-            }).sort((a, b) => a.name.localeCompare(b.name));
-
-            let newHtmlContent;
-            if (foundry.applications?.handlebars?.renderTemplate) {
-                newHtmlContent = await foundry.applications.handlebars.renderTemplate(templatePath, { targets: formattedTargets, itemName: aoeData.itemName, saveType: formattedSaveType, saveDC: aoeData.saveDC, damageTotal: aoeData.damageTotal, damageBreakdown: aoeData.damageBreakdown, damageFormula: aoeData.damageFormula, damageTooltip: aoeData.damageTooltip, isGM: game.user.isGM });
-            } else {
-                newHtmlContent = await renderTemplate(templatePath, { targets: formattedTargets, itemName: aoeData.itemName, saveType: formattedSaveType, saveDC: aoeData.saveDC, damageTotal: aoeData.damageTotal, damageBreakdown: aoeData.damageBreakdown, damageFormula: aoeData.damageFormula, damageTooltip: aoeData.damageTooltip, isGM: game.user.isGM });
-            }
-            await updatedMessage.update({ content: newHtmlContent }, { necroHelperProcessed: true });
+        // Force AoE Easy Resolve to instantly redraw the chat card with the new toggles
+        if (game.modules.get("aoe-easy-resolve")?.api?.refreshCard) {
+            await game.modules.get("aoe-easy-resolve").api.refreshCard(message.id);
         }
     }
 });
-
-
-
-// --- ANTI-RECURSION APPLY DAMAGE PROTOTYPE ---
-if (!CONFIG.Actor.documentClass.prototype._necroBombApplyDamage) {
-    CONFIG.Actor.documentClass.prototype._necroBombApplyDamage = CONFIG.Actor.documentClass.prototype.applyDamage;
-    
-    CONFIG.Actor.documentClass.prototype.applyDamage = async function(options) {
-        if (options._necroBombProcessed) return this._necroBombApplyDamage(options);
-        options._necroBombProcessed = true;
-
-        const isBomb = options.item?.name?.includes("Necrotic Bomb") || options.source?.name?.includes("Necrotic Bomb") || options.message?.flags?.["aoe-easy-resolve"]?.itemName?.includes("Necrotic Bomb");
-        const isHarm = options.item?.name === "Harm" || options.source?.name === "Harm" || options.message?.flags?.["aoe-easy-resolve"]?.itemName === "Harm";
-        const isBarrage = options.item?.name?.includes("Bony Barrage") || options.source?.name?.includes("Bony Barrage") || options.message?.flags?.["aoe-easy-resolve"]?.itemName?.includes("Bony Barrage");
-        const isMosquito = options.item?.name?.includes("Dread Mosquito") || options.source?.name?.includes("Dread Mosquito") || options.message?.flags?.["aoe-easy-resolve"]?.itemName?.includes("Dread Mosquito");
-        
-        if (isBomb || isHarm || isBarrage || isMosquito) {
-            let msg = options.message;
-            if (!msg) {
-                msg = game.messages.contents.slice(-10).reverse().find(m => {
-                    const aoeName = m.flags?.["aoe-easy-resolve"]?.itemName || "";
-                    const content = m.content || "";
-                    if (isBomb) return aoeName.includes("Necrotic Bomb") || content.includes("Necrotic Bomb");
-                    if (isHarm) return aoeName === "Harm" || content.includes("Harm");
-                    if (isBarrage) return aoeName.includes("Bony Barrage") || content.includes("Bony Barrage");
-                    if (isMosquito) return aoeName.includes("Dread Mosquito") || content.includes("Dread Mosquito");
-                    return false;
-                });
-            }
-            
-            if (msg) {
-                let token = null;
-                if (options.token) token = canvas.tokens.get(options.token.id || options.token._id) || options.token.object;
-                if (!token) token = this.getActiveTokens()[0];
-
-                if (token) {
-                    if (isBarrage) {
-                        const isImmune = msg.flags?.["aoe-easy-resolve"]?.targets?.[token.id]?.isImmune;
-                        if (isImmune) {
-                            if (options.damage) options.damage = 0;
-                            if (options.roll) options.roll = 0;
-                            if (options.damage?.instances) options.damage.instances.forEach(i => { i.total = 0; });
-                            return this._necroBombApplyDamage(options);
-                        }
-                    }
-
-                    const negHeal = this.system.attributes.hp?.negativeHealing || false;
-
-                    if (isBomb || isMosquito) {
-                        const dmgType = msg.getFlag("necromancer-thrall-helper", `dmgType_${token.id}`) || "void";
-
-                        // Immunity logic
-                        if ((dmgType === 'vitality' && !negHeal) || (dmgType === 'void' && negHeal)) {
-                            if (options.damage) options.damage = 0;
-                            if (options.roll) options.roll = 0;
-                            if (options.damage?.instances) options.damage.instances.forEach(i => { i.total = 0; i.type = dmgType; });
-                            return this._necroBombApplyDamage(options);
-                        }
-
-                        // Seamless Type Replacement for correct Weakness/Resistance calc
-                        if (options.roll && options.roll.instances && options.roll.instances.length > 0) {
-                            const firstInstanceType = options.roll.instances[0].type;
-                            if (firstInstanceType !== dmgType) {
-                                const rawFormula = options.roll.formula.replace(/\[.*?\]/g, "").trim();
-                                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-                                if (DamageRoll) {
-                                    const newRoll = await new DamageRoll(`${rawFormula}[${dmgType}]`).evaluate({async: true});
-                                    options.roll = newRoll;
-                                    options.damage = newRoll;
-                                }
-                            }
-                        }
-                    } 
-                    else if (isHarm) {
-                        const harmState = msg.getFlag("necromancer-thrall-helper", `harmState_${token.id}`) || "void";
-                        let finalDmgType = "void";
-                        if (harmState === "vit") finalDmgType = "vitality";
-                        if (harmState === "heal") finalDmgType = negHeal ? "void" : "vitality";
-
-                        if (options.roll && options.roll.instances && options.roll.instances.length > 0) {
-                            const firstInstanceType = options.roll.instances[0].type;
-                            if (firstInstanceType !== finalDmgType) {
-                                const rawFormula = options.roll.formula.replace(/\[.*?\]/g, "").trim();
-                                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-                                if (DamageRoll) {
-                                    const newRoll = await new DamageRoll(`${rawFormula}[${finalDmgType}]`).evaluate({async: true});
-                                    options.roll = newRoll;
-                                    options.damage = newRoll;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return this._necroBombApplyDamage(options);
-    };
-}
 
 
 // --- MAIN CLASS ---
@@ -5166,7 +5042,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         flags: { "necromancer-thrall-helper": { stormRegionId: regionId } }
                     };
 
-                    const [createdRegion] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+                    const [createdRegion] = await executeHazard(regionData, drawingData);
                     await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
                     
                    
@@ -5537,7 +5413,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 };
 
                                 await actor.createEmbeddedDocuments("Item", [effectData]);
-                                await tokenDoc.delete();
+                                await executeDelete(tokenDoc.id);
 
                                 await ChatMessage.create({
                                     speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -5924,7 +5800,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 }
                                 
                                 if (isKamikaze && tokenDoc) {
-                                    await tokenDoc.delete();
+                                    await executeDelete(tokenDoc.id);
                                 }
                             }
                         });
@@ -6036,7 +5912,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                 <p style="margin: 0; font-weight: bold; color: ${dosColors[dosNum]};">${dosMap[dosNum]}!</p>
                                         `;
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         if (dosNum === 0) {
                                             await actor.update({ "system.resources.focus.value": currentFocus });
@@ -6278,7 +6154,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: exactDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -6408,7 +6284,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: exactDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -6531,7 +6407,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const tWidth = tokenDoc.width * gridSize;
                                         const tHeight = tokenDoc.height * gridSize;
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
                                         
                                         const [marker] = await canvas.scene.createEmbeddedDocuments("Drawing", [{
                                             author: game.user.id,
@@ -6831,7 +6707,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         };
 
                                         await actor.createEmbeddedDocuments("Item", [effectData]);
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -7023,7 +6899,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const activeBuffs = tokenDoc.actor.items.filter(i => addedEffectIds.includes(i.id)).map(i => i.id);
                                         if (activeBuffs.length > 0) await tokenDoc.actor.deleteEmbeddedDocuments("Item", activeBuffs);
                                     }
-                                    if (isKamikaze && tokenDoc) await tokenDoc.delete();
+                                    if (isKamikaze && tokenDoc) await executeDelete(tokenDoc.id);
                                 }, 60000); 
                             }
 
@@ -7151,7 +7027,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
 
                         await actor.createEmbeddedDocuments("Item", [effectData]);
-                        await tokenDoc.delete();
+                        await executeDelete(tokenDoc.id);
 
                         await ChatMessage.create({
                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -7307,11 +7183,11 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             flags: { "necromancer-thrall-helper": { goreRegionId: regionId } }
                                         };
 
-                                        const [createdRegion] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+                                        const [createdRegion] = await executeHazard(regionData, drawingData);
                                         await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
 
                                         // SAFE DELETION: Let Foundry natively handle the combatant removal
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
                                         this.render({ force: false });
 
                                         await ChatMessage.create({
@@ -7475,7 +7351,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             }
                                         };
 
-                                        await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+                                        await executeHazard(regionData, drawingData);
                                         await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
 
                                         await ChatMessage.create({
@@ -7568,6 +7444,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Scream!",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         
                                         const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
@@ -7781,7 +7660,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: exactDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -7836,7 +7715,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     icon: '<i class="fas fa-skull"></i>',
                                     label: "Consume",
                                     callback: async () => {
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
                                         await actor.setFlag("necromancer-thrall-helper", "consumeThrallUsed", true);
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
                                         await actor.update({ "system.resources.focus.value": currentFocus + 1 });
@@ -7913,6 +7792,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Hurl",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const targetsData = {};
                                         targetsData[targetToken.document.id] = {
@@ -7935,7 +7817,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: exactDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -8018,6 +7900,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Shatter & Fire",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         
                                         const gridSize = canvas.scene.grid.size;
@@ -8026,8 +7911,15 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const tWidth = tokenDoc.width * gridSize;
                                         const tHeight = tokenDoc.height * gridSize;
 
-                                        await tokenDoc.delete();
-                                        
+                                        await executeDelete(tokenDoc.id);
+                                        window.aoeEasyResolveCache = {
+                                            item: spearSpell,
+                                            name: "Bone Spear",
+                                            dc: exactDC,
+                                            type: "reflex",
+                                            hazardDuration: null,
+                                            originMessageId: null
+                                        };
                                         const [marker] = await canvas.scene.createEmbeddedDocuments("Drawing", [{
                                             author: game.user.id,
                                             shape: { type: "e", width: tWidth, height: tHeight },
@@ -8147,6 +8039,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Infuse",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const targetsData = {};
                                         targetsData[targetToken.document.id] = {
@@ -8169,7 +8064,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: infusionDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -8223,31 +8118,32 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         }
 
                         let bombSpell = actor.items.find(i => i.type === "spell" && i.name === "Necrotic Bomb");
-                        const spellSystemData = {
-                            level: { value: bombRank },
-                            traits: { value: ["necromancer", "manipulate", "concentrate"] },
-                            tradition: { value: "divine" },
-                            area: { type: "emanation", value: 10 },
-                            defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
-                            damage: { "0": { formula: `${bombRank}d12`, type: "untyped" } }
-                        };
+                    const spellSystemData = {
+                        level: { value: bombRank },
+                        traits: { value: ["necromancer", "manipulate", "concentrate", "void"] },
+                        tradition: { value: "divine" },
+                        area: { type: "emanation", value: 10 },
+                        target: { value: "creatures" }, // <--- CRITICAL: Tells the system it targets creatures
+                        defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
+                        damage: { "0": { formula: `${bombRank}d12`, type: "void" } }
+                    };
 
-                        if (!bombSpell) {
-                            const spellData = { name: "Necrotic Bomb", type: "spell", img: "icons/magic/death/projectile-skull-flaming-green.webp", system: spellSystemData };
-                            const created = await actor.createEmbeddedDocuments("Item", [spellData]);
-                            bombSpell = created[0];
-                        } else {
-                            await bombSpell.update({ system: spellSystemData });
-                        }
+                    if (!bombSpell) {
+                        const spellData = { name: "Necrotic Bomb", type: "spell", img: "icons/magic/death/projectile-skull-flaming-green.webp", system: spellSystemData };
+                        const created = await actor.createEmbeddedDocuments("Item", [spellData]);
+                        bombSpell = created[0];
+                    } else {
+                        await bombSpell.update({ system: spellSystemData });
+                    }
 
-                        await bombSpell.setFlag("aoe-easy-resolve", "useCustomDamage", true);
-                        await bombSpell.setFlag("aoe-easy-resolve", "customDamage", `${bombRank}d12`);
-                        await bombSpell.setFlag("aoe-easy-resolve", "customDamageType", "untyped");
-                        await bombSpell.setFlag("aoe-easy-resolve", "useOverride", true);
-                        await bombSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
-                        await bombSpell.setFlag("aoe-easy-resolve", "saveType", "fortitude");
-                        await bombSpell.setFlag("aoe-easy-resolve", "allyBaseEffect", "standard");
-                        await bombSpell.setFlag("aoe-easy-resolve", "enemyBaseEffect", "standard");
+                    await bombSpell.setFlag("aoe-easy-resolve", "useCustomDamage", true);
+                    await bombSpell.setFlag("aoe-easy-resolve", "customDamage", `${bombRank}d12`);
+                    await bombSpell.setFlag("aoe-easy-resolve", "customDamageType", "void");
+                    await bombSpell.setFlag("aoe-easy-resolve", "useOverride", true);
+                    await bombSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
+                    await bombSpell.setFlag("aoe-easy-resolve", "saveType", "fortitude");
+                    await bombSpell.setFlag("aoe-easy-resolve", "allyBaseEffect", "standard");
+                    await bombSpell.setFlag("aoe-easy-resolve", "enemyBaseEffect", "standard");
 
                         new Dialog({
                             title: "Necrotic Bomb",
@@ -8258,9 +8154,13 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Detonate",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
                                         
+                                        // 1. Set the Cache for the Bomb
                                         window.aoeEasyResolveCache = {
                                             item: bombSpell,
                                             name: "Necrotic Bomb",
@@ -8269,14 +8169,13 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             hazardDuration: null,
                                             originMessageId: null
                                         };
-
+    
                                         const gridDist = canvas.scene?.grid?.distance || 5;
                                         const tokenWidth = tokenDoc.width || 1;
                                         const tokenRadiusFeet = (tokenWidth * gridDist) / 2;
                                         const totalEmanationFeet = 10 + tokenRadiusFeet;
-
-                                        await tokenDoc.delete();
-
+    
+                                        // 2. Drop the template FIRST so it grabs the Bomb cache
                                         await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
                                             t: "circle", 
                                             user: game.user.id, 
@@ -8285,6 +8184,11 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             distance: totalEmanationFeet, 
                                             fillColor: "#660066"
                                         }]);
+    
+                                        await new Promise(r => setTimeout(r, 150));
+    
+                                        await executeDelete(tokenDoc.id);
+    
                                     }
                                 },
                                 cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
@@ -8352,6 +8256,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     callback: async () => {
 
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const targetsData = {};
                                         targetsData[targetToken.document.id] = {
@@ -8374,7 +8281,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             saveDC: lifeTapDC
                                         });
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -8504,7 +8411,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         };
 
                                         await targetActor.createEmbeddedDocuments("Item", [effectData]);
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -8596,6 +8503,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     label: "Shatter & Fire",
                                     callback: async () => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         
                                         const gridSize = canvas.scene.grid.size;
@@ -8604,7 +8514,15 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const tWidth = tokenDoc.width * gridSize;
                                         const tHeight = tokenDoc.height * gridSize;
 
-                                        await tokenDoc.delete();
+                                        await executeDelete(tokenDoc.id);
+                                        window.aoeEasyResolveCache = {
+                                            item: barrageSpell,
+                                            name: "Bony Barrage",
+                                            dc: exactDC,
+                                            type: "reflex",
+                                            hazardDuration: null,
+                                            originMessageId: null
+                                        };
                                         
                                         const [marker] = await canvas.scene.createEmbeddedDocuments("Drawing", [{
                                             author: game.user.id,
@@ -9323,7 +9241,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         }
                     };
                     
-                    await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+                    await executeHazard(regionData, drawingData);
                     await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
 
                     if (currentSpawnIndex < count) {
@@ -9350,7 +9268,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 
                 const tokenDoc = canvas.scene.tokens.get(tokenId);
                 if (tokenDoc) {
-                    await tokenDoc.delete();
+                    await executeDelete(tokenDoc.id);
                     ui.notifications.info(`Dismissed ${tokenDoc.name}.`);
                 }
             });
