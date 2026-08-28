@@ -352,7 +352,6 @@ Hooks.on("createItem", async (item, options, userId) => {
 
     const slug = item.system.slug;
 
-    
     if (slug === "unconscious" || slug === "prone") {
         setTimeout(async () => {
             const badCond = actor.items.find(i => i.id === item.id);
@@ -365,7 +364,6 @@ Hooks.on("createItem", async (item, options, userId) => {
         const isAlreadyPuppet = actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isPuppetedCorpse"));
         if (isAlreadyPuppet) return; 
 
-    
         setTimeout(async () => {
 
             const badConditions = actor.items.filter(i => i.type === "condition" && ["dying", "wounded", "doomed", "unconscious", "prone"].includes(i.system.slug));
@@ -376,7 +374,6 @@ Hooks.on("createItem", async (item, options, userId) => {
             const currentMaxHP = actor.system.attributes.hp.max;
             const hpDelta = 200 - currentMaxHP;
 
-    
             const puppetEffect = {
                 name: "Effect: Puppeted Corpse",
                 type: "effect",
@@ -408,20 +405,24 @@ Hooks.on("createItem", async (item, options, userId) => {
 
             await actor.createEmbeddedDocuments("Item", [puppetEffect]);
 
-            setTimeout(async () => {
-                await actor.update({ "system.attributes.hp.value": 200 });
-                
-                await ChatMessage.create({
-                    speaker: ChatMessage.getSpeaker({ actor: actor }),
-                    flavor: `<strong>Final Union: Puppeted Corpse</strong>`,
-                    content: `
-                        <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;">
-                            <p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has fallen, but the heroic spirit refuses to abandon the body!</p>
-                            <p style="margin: 0; font-size: 0.95em;">The corpse rises as an undead object with <b>200 HP</b> (Broken Threshold 100).</p>
-                        </div>
-                    `
-                });
-            }, 250);
+            // DYNAMIC POLLING LOOP: Wait for PF2e to process the Max HP buff
+            for (let attempts = 0; attempts < 20; attempts++) {
+                if (actor.system.attributes.hp.max >= 200) break;
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            await actor.update({ "system.attributes.hp.value": 200 });
+            
+            await ChatMessage.create({
+                speaker: ChatMessage.getSpeaker({ actor: actor }),
+                flavor: `<strong>Final Union: Puppeted Corpse</strong>`,
+                content: `
+                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;">
+                        <p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has fallen, but the heroic spirit refuses to abandon the body!</p>
+                        <p style="margin: 0; font-size: 0.95em;">The corpse rises as an undead object with <b>200 HP</b> (Broken Threshold 100).</p>
+                    </div>
+                `
+            });
 
         }, 50);
     }
@@ -1454,29 +1455,38 @@ Hooks.once("ready", () => {
 
                 window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: "" }, img: "icons/magic/water/blood-drop-skull.webp", content: receiptText, saveNote: `Stage ${stage}` });
 
-                setTimeout(async () => {
+                let diseaseAttempts = 0;
+                const applyDisease = async () => {
                     try {
                         let currentSickened = token.actor.getCondition("sickened")?.value || 0;
-                        while (currentSickened < stage) {
+                        if (currentSickened < stage) {
                             await token.actor.increaseCondition("sickened");
-                            currentSickened++;
                         }
-                    } catch(e) { console.error("Necromancer Helper | Failed to apply Sickened:", e); }
-
-                    try {
-                        const effectData = {
-                            name: "Effect: Necrotic Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp",
-                            system: {
-                                slug: "effect-necrotic-blood", level: { value: 18 }, 
-                                duration: { value: durationRounds, unit: "rounds", expiry: "turn-end" },
-                                description: { value: `<b>Necrotic Blood (Stage ${stage})</b><br>Stage 1: 3d10 ${chosenType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${chosenType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${chosenType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>` },
-                                rules: [{ key: "Weakness", type: "bleed", value: weaknessVal }]
-                            },
-                            flags: { "necromancer-thrall-helper": { isNecroticBlood: true, masterId: casterId, dmgType: chosenType, necroticBloodDC: saveDC, stage: stage } }
-                        };
-                        await token.actor.createEmbeddedDocuments("Item", [effectData]);
-                    } catch(e) { console.error("Necromancer Helper | Disease creation failed:", e); }
-                }, 250);
+                        
+                        const hasEffect = token.actor.items.some(i => i.system?.slug === "effect-necrotic-blood");
+                        if (!hasEffect) {
+                            const effectData = {
+                                name: "Effect: Necrotic Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp",
+                                system: {
+                                    slug: "effect-necrotic-blood", level: { value: 18 }, 
+                                    duration: { value: durationRounds, unit: "rounds", expiry: "turn-end" },
+                                    description: { value: `<b>Necrotic Blood (Stage ${stage})</b><br>Stage 1: 3d10 ${chosenType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${chosenType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${chosenType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>` },
+                                    rules: [{ key: "Weakness", type: "bleed", value: weaknessVal }]
+                                },
+                                flags: { "necromancer-thrall-helper": { isNecroticBlood: true, masterId: casterId, dmgType: chosenType, necroticBloodDC: saveDC, stage: stage } }
+                            };
+                            await token.actor.createEmbeddedDocuments("Item", [effectData]);
+                        }
+                    } catch(e) {
+                        if (diseaseAttempts < 20) {
+                            diseaseAttempts++;
+                            setTimeout(applyDisease, 100);
+                        } else {
+                            console.error("Necromancer Helper | Disease DB lock timeout:", e);
+                        }
+                    }
+                };
+                applyDisease();
 
                 targetData.hasApplied = true;
             }
@@ -2132,14 +2142,16 @@ Hooks.on("renderChatMessage", (message, html) => {
         const unconscious = necroActor.getCondition?.("unconscious");
         if (unconscious) await unconscious.delete();
 
-        // Erase the automatic Wounded condition applied by the system rules engine
-        setTimeout(async () => {
+        // DYNAMIC POLLING LOOP: Wait up to 2 seconds for PF2e to auto-apply Wounded
+        for (let attempts = 0; attempts < 20; attempts++) {
             const currentWoundedCond = necroActor.getCondition?.("wounded");
             if ((currentWoundedCond?.value || 0) > preWounded) {
                 if (preWounded === 0) await currentWoundedCond.delete();
                 else if (typeof necroActor.decreaseCondition === "function") await necroActor.decreaseCondition("wounded");
+                break;
             }
-        }, 150);
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
 
         let spellDC = 10 + Math.floor((necroActor.level || 1) * 1.5);
         if (necroActor.spellcasting) {
@@ -3175,85 +3187,89 @@ Hooks.on("pf2e.startTurn", async (combatant, combat, userId) => {
     }
 });
 
-Hooks.on("createToken", (tokenDoc, options, userId) => {
+Hooks.on("createToken", async (tokenDoc, options, userId) => {
     if (game.user.id !== userId) return;
 
-    setTimeout(async () => {
-        const actor = tokenDoc.actor;
-        if (!actor) return;
+    // DYNAMIC POLLING LOOP: Wait up to 2 seconds for the server to attach the actor
+    let actor = null;
+    for (let attempts = 0; attempts < 20; attempts++) {
+        actor = tokenDoc.actor;
+        if (actor && actor.system?.traits) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    // If they have 2000+ ping and it still fails, abort safely
+    if (!actor) return;
 
-        let masterId = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") || actor.getFlag("pf2e", "master")?.id;
-        if (!masterId) return;
+    let masterId = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") || actor.getFlag("pf2e", "master")?.id;
+    if (!masterId) return;
 
-        const masterActor = game.actors.get(masterId) || canvas.scene.tokens.get(masterId)?.actor;
-        if (!masterActor) return;
+    const masterActor = game.actors.get(masterId) || canvas.scene.tokens.get(masterId)?.actor;
+    if (!masterActor) return;
 
-        const isCustomThrall = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") === masterId;
-        const hasConjurer = masterActor.items.some(i => ["spell", "feat", "action"].includes(i.type) && i.name.toLowerCase().includes("conjurer of corpses"));
-        const traits = actor.system?.traits?.value || [];
-        const isUndead = traits.includes("undead") || traits.some(tr => typeof tr === "string" && tr.toLowerCase() === "undead");
-        const isNativeSummon = hasConjurer && isUndead && (actor.getFlag("pf2e", "master")?.id === masterId || tokenDoc.name.includes(masterActor.name));
+    const isCustomThrall = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") === masterId;
+    const hasConjurer = masterActor.items.some(i => ["spell", "feat", "action"].includes(i.type) && i.name.toLowerCase().includes("conjurer of corpses"));
+    const traits = actor.system?.traits?.value || [];
+    const isUndead = traits.includes("undead") || traits.some(tr => typeof tr === "string" && tr.toLowerCase() === "undead");
+    const isNativeSummon = hasConjurer && isUndead && (actor.getFlag("pf2e", "master")?.id === masterId || tokenDoc.name.includes(masterActor.name));
 
-        if (!isCustomThrall && !isNativeSummon) return;
+    if (!isCustomThrall && !isNativeSummon) return;
 
-        // --- THRALL TEAMWORK PING ---
-        const hasTeamwork = masterActor.items.some(i => i.name === "Thrall Teamwork");
-        if (hasTeamwork) {
-            const currentCombat = game.combat;
-            // If you are testing outside of combat, it just sets the flag to a string
-            const currentRound = currentCombat ? currentCombat.round : "out-of-combat";
-            const lastUsed = masterActor.getFlag("necromancer-thrall-helper", "teamworkRound");
+    // --- THRALL TEAMWORK PING ---
+    const hasTeamwork = masterActor.items.some(i => i.name === "Thrall Teamwork");
+    if (hasTeamwork) {
+        const currentCombat = game.combat;
+        const currentRound = currentCombat ? currentCombat.round : "out-of-combat";
+        const lastUsed = masterActor.getFlag("necromancer-thrall-helper", "teamworkRound");
 
-            if (lastUsed !== currentRound) {
-                await masterActor.setFlag("necromancer-thrall-helper", "teamworkRound", currentRound);
-                
-                await ChatMessage.create({
-                    speaker: ChatMessage.getSpeaker({ actor: masterActor }),
-                    flavor: `<strong>Thrall Teamwork</strong>`,
-                    content: `
-                        <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #8a2be2;">
-                            <p style="margin: 0;"><b>${masterActor.name}</b> coordinates with the newly risen dead!</p>
-                            <p style="margin: 4px 0 0 0; font-size: 0.9em;">Take a melee Strike as a <b>Free Action</b> against an enemy within your reach that is adjacent to at least one of your thralls.</p>
-                        </div>
-                    `
-                });
-            }
+        if (lastUsed !== currentRound) {
+            await masterActor.setFlag("necromancer-thrall-helper", "teamworkRound", currentRound);
+            
+            await ChatMessage.create({
+                speaker: ChatMessage.getSpeaker({ actor: masterActor }),
+                flavor: `<strong>Thrall Teamwork</strong>`,
+                content: `
+                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #8a2be2;">
+                        <p style="margin: 0;"><b>${masterActor.name}</b> coordinates with the newly risen dead!</p>
+                        <p style="margin: 4px 0 0 0; font-size: 0.9em;">Take a melee Strike as a <b>Free Action</b> against an enemy within your reach that is adjacent to at least one of your thralls.</p>
+                    </div>
+                `
+            });
         }
+    }
 
+    // --- THE HALLOWED / UNHOLY DEAD BUFFS ---
+    const hasHoly = masterActor.items.some(i => i.name === "The Hallowed Dead");
+    const hasUnholy = masterActor.items.some(i => i.name === "The Unholy Dead");
 
-        const hasHoly = masterActor.items.some(i => i.name === "The Hallowed Dead");
-        const hasUnholy = masterActor.items.some(i => i.name === "The Unholy Dead");
+    if (!hasHoly && !hasUnholy) return;
 
-        if (!hasHoly && !hasUnholy) return;
+    const alignment = hasHoly ? "holy" : "unholy";
+    const featName = hasHoly ? "The Hallowed Dead" : "The Unholy Dead";
+    const damageBonus = masterActor.level >= 10 ? 2 : 1;
 
-        const alignment = hasHoly ? "holy" : "unholy";
-        const featName = hasHoly ? "The Hallowed Dead" : "The Unholy Dead";
-        const damageBonus = masterActor.level >= 10 ? 2 : 1;
+    if (actor.items.some(i => i.name === featName)) return;
 
-        if (actor.items.some(i => i.name === featName)) return;
+    const effectData = {
+        name: featName,
+        type: "effect",
+        img: hasHoly ? "icons/magic/light/explosion-star-glow-yellow.webp" : "icons/magic/death/skull-horned-horns-purple.webp",
+        system: {
+            duration: { value: -1, unit: "unlimited" },
+            description: { value: `Thrall gains the ${alignment} trait. Strikes deal +${damageBonus} spirit damage and gain the ${alignment} trait.` },
+            rules: [
+                { key: "RollOption", domain: "all", option: `trait:${alignment}` },
+                { key: "FlatModifier", selector: "strike-damage", value: damageBonus, damageType: "spirit", type: "untyped" },
+                { key: "AdjustStrike", mode: "add", property: "weapon-traits", value: alignment }
+            ]
+        }
+    };
 
-        const effectData = {
-            name: featName,
-            type: "effect",
-            img: hasHoly ? "icons/magic/light/explosion-star-glow-yellow.webp" : "icons/magic/death/skull-horned-horns-purple.webp",
-            system: {
-                duration: { value: -1, unit: "unlimited" },
-                description: { value: `Thrall gains the ${alignment} trait. Strikes deal +${damageBonus} spirit damage and gain the ${alignment} trait.` },
-                rules: [
-                    { key: "RollOption", domain: "all", option: `trait:${alignment}` },
-                    { key: "FlatModifier", selector: "strike-damage", value: damageBonus, damageType: "spirit", type: "untyped" },
-                    { key: "AdjustStrike", mode: "add", property: "weapon-traits", value: alignment }
-                ]
-            }
-        };
+    await actor.createEmbeddedDocuments("Item", [effectData]);
 
-        await actor.createEmbeddedDocuments("Item", [effectData]);
-
-        const newTraits = new Set(traits);
-        newTraits.add(alignment);
-        await actor.update({ "system.traits.value": Array.from(newTraits) });
-
-    }, 250);
+    const newTraits = new Set(traits);
+    newTraits.add(alignment);
+    await actor.update({ "system.traits.value": Array.from(newTraits) });
 });
 // --- RECURRING NIGHTMARE: DESTINATION-AWARE SPATIAL HAUNT ---
 globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
@@ -4527,11 +4543,18 @@ if (nightmareBtn) {
             }
             await actor.unsetFlag("necromancer-thrall-helper", "nightmareDestroyed");
 
-            // Evaluate fear prompt on initial placement
-            setTimeout(() => {
+            // Evaluate fear prompt on initial placement (Dynamic Polling)
+            let attempts = 0;
+            const triggerHaunt = async () => {
                 const liveTokenDoc = canvas.scene.tokens.get(createdToken.id);
-                if (liveTokenDoc) globalThis.NecroThrallHelper?.checkNightmareHaunt(liveTokenDoc);
-            }, 300);
+                if (liveTokenDoc) {
+                    globalThis.NecroThrallHelper?.checkNightmareHaunt(liveTokenDoc);
+                } else if (attempts < 20) {
+                    attempts++;
+                    setTimeout(triggerHaunt, 100);
+                }
+            };
+            triggerHaunt();
 
             this.render({ force: false });
 
@@ -5798,17 +5821,17 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     let variantIndex = 0;
                     if (mapPenalty === -5) variantIndex = 1;
                     if (mapPenalty === -10) variantIndex = 2;
-                
+
                     const isNightmare = tokenDoc.getFlag("necromancer-thrall-helper", "isRecurringNightmare");
                     const isLancer = tokenDoc.getFlag("necromancer-thrall-helper", "isSkeletalLancer");
                     const isGraveyard = tokenDoc.getFlag("necromancer-thrall-helper", "isLivingGraveyard") || tokenDoc.name.includes("Living Graveyard");
                     const isPerfected = tokenDoc.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || tokenDoc.name.includes("Perfected");
                     const spellRank = passedSpellRank || Math.max(1, Math.ceil(necroLevel / 2));
-                
+
                     let damageType = "bludgeoning";
                     if (isNightmare) damageType = "void";
                     if (isLancer) damageType = "piercing";
-                
+
                     let totalChargeDice = chargeDice;
                     if (isNightmare || isLancer) {
                         const bonusDice = spellRank >= 8 ? 3 : 2;
@@ -5816,90 +5839,81 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     }
                     if (isGraveyard && chargeDice > 0) totalChargeDice += 3;
                     if (isPerfected && chargeDice > 0) totalChargeDice += 6;
-                
+
+                    // 1. Request the weapon if it doesn't exist
                     let existingWeapon = tokenDoc.actor.items.find(i => i.type === "melee" && i.name.includes("Thrall Strike"));
                     if (!existingWeapon) {
                         let attackMod = Math.floor(necroLevel * 1.5); 
                         const spellcasting = actor.spellcasting?.filter(s => s.statistic)?.sort((a,b) => b.statistic.check.mod - a.statistic.check.mod)[0];
                         if (spellcasting) attackMod = spellcasting.statistic.check.mod;
-                
+
                         const weaponData = {
                             name: "Thrall Strike",
                             type: "melee", 
-                            img: "systems/pf2e/icons/spells/ghoul-touch.webp",
+                            img: "icons/skills/melee/unarmed-punch-fist.webp",
                             system: {
                                 weaponType: { value: "melee" },
                                 bonus: { value: attackMod },
-                                damageRolls: {
-                                    base: {
-                                        damage: `${baseDice}d6`,
-                                        damageType: damageType 
-                                    }
-                                },
-                                traits: { value: ["magical"] }
+                                damageRolls: { base: { damage: `${baseDice}d6`, damageType: damageType } },
+                                traits: { value: ["magical", "unarmed"] }
                             }
                         };
                         await tokenDoc.actor.createEmbeddedDocuments("Item", [weaponData]);
-                        await new Promise(resolve => setTimeout(resolve, 150));
                     }
-                
+
+                    // 2. Request the charge buff if needed
                     let addedEffectIds = [];
                     if (totalChargeDice > 0) {
                         const rules = [{
-                            key: "DamageDice",
-                            selector: "strike-damage",
-                            diceNumber: totalChargeDice,
-                            dieSize: "d6",
-                            slug: "thrall-charge-dice"
+                            key: "DamageDice", selector: "strike-damage", diceNumber: totalChargeDice, dieSize: "d6", slug: "thrall-charge-dice"
                         }];
-                
                         if (isKamikaze) {
-                            rules.push({
-                                key: "FlatModifier",
-                                selector: "strike-damage",
-                                value: spellRank,
-                                type: "status",
-                                slug: "thrall-charge-status"
-                            });
+                            rules.push({ key: "FlatModifier", selector: "strike-damage", value: spellRank, type: "status", slug: "thrall-charge-status" });
                         }
-                
+
                         const effectData = {
                             type: "effect",
                             name: isKamikaze ? "Thrall Charge (Kamikaze)" : "Thrall Charge",
                             img: "icons/magic/death/undead-ghost-scream-teal.webp",
-                            system: {
-                                level: { value: spellRank },
-                                duration: { value: 1, unit: "rounds", expiry: "turn-end" },
-                                rules: rules
-                            }
+                            system: { level: { value: spellRank }, duration: { value: 1, unit: "rounds", expiry: "turn-end" }, rules: rules }
                         };
-                        
                         const createdEffects = await tokenDoc.actor.createEmbeddedDocuments("Item", [effectData]);
                         addedEffectIds = createdEffects.map(effect => effect.id);
-                        await new Promise(resolve => setTimeout(resolve, 150));
                     }
-                
-                    const actions = tokenDoc.actor?.system?.actions;
-                    const strike = actions?.find(a => a.item?.name?.includes("Thrall Strike") || a.slug?.includes("thrall-strike"));
-                
+
+                    // 3. DYNAMIC POLLING LOOP: Wait for the network to sync
+                    let strike = null;
+                    for (let attempts = 0; attempts < 20; attempts++) {
+                        const actionsList = tokenDoc.actor?.system?.actions;
+                        strike = actionsList?.find(a => a.item?.name?.includes("Thrall Strike") || a.slug?.includes("thrall-strike"));
+                        
+                        // If PF2e has finished processing the weapon into an action, break the loop
+                        if (strike && strike.variants && strike.variants[variantIndex]) {
+                            break; 
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 100)); // Check again in 100ms
+                    }
+
+                    // 4. Final safety check in case they have a 2000+ ping
                     if (!strike || !strike.variants || !strike.variants[variantIndex]) {
-                        ui.notifications.warn(`Execution failed. ${tokenDoc.name} could not draw its weapon.`);
+                        ui.notifications.warn(`Execution failed. ${tokenDoc.name} could not draw its weapon (Network Timeout).`);
                         return;
                     }
-                
+
+                    // 5. Execute the roll
                     await strike.variants[variantIndex].roll({ event: eventObj });
-                
+
                     if (this.currentMap === undefined || this.currentMap === 0) {
                         this.currentMap = -5;
                     } else if (this.currentMap === -5) {
                         this.currentMap = -10;
                     }
                     this.render(false); 
-                    
+
                     if (isKamikaze) {
                         await tokenDoc.actor.update({ "system.attributes.hp.value": 0 });
                     }
-                
+
                     if (addedEffectIds.length > 0 || isKamikaze) {
                         const hookId = Hooks.on("createChatMessage", async (msg) => {
                             if (msg.speaker?.token === tokenDoc.id && msg.flags?.pf2e?.context?.type === "damage-roll") {
@@ -5914,7 +5928,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 }
                             }
                         });
-                
+
                         setTimeout(async () => {
                             Hooks.off("createChatMessage", hookId);
                             if (addedEffectIds.length > 0 && tokenDoc?.actor) {
@@ -6134,12 +6148,17 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                     
                                                     await newActor.createEmbeddedDocuments("Item", [effectData]);
 
-                                                    setTimeout(async () => {
+                                                   // Dynamic Polling: Wait for PF2e to set Max HP to 100
+                                                   for (let i = 0; i < 20; i++) {
+                                                    if (newActor.system.attributes.hp.max === 100) {
                                                         await newActor.update({
                                                             "system.attributes.hp.value": 100,
                                                             "system.attributes.hp.temp": 0
                                                         });
-                                                    }, 250);
+                                                        break;
+                                                    }
+                                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                                }
                                                 }
                                             });
                                         }
@@ -6893,7 +6912,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     }
                                 };
                                 await tokenDoc.actor.createEmbeddedDocuments("Item", [weaponData]);
-                                await new Promise(resolve => setTimeout(resolve, 150));
                             }
 
                             // 2. Apply the fresh Thrall Charge Buff
@@ -6914,15 +6932,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 };
                                 const createdEffects = await tokenDoc.actor.createEmbeddedDocuments("Item", [effectData]);
                                 addedEffectIds = createdEffects.map(effect => effect.id);
-                                await new Promise(resolve => setTimeout(resolve, 150));
-                            }
-
-                            const actionsList = tokenDoc.actor?.system?.actions;
-                            const strike = actionsList?.find(a => a.item?.name?.includes("Thrall Strike") || a.slug?.includes("thrall-strike"));
-                            
-                            if (!strike || !strike.variants) {
-                                ui.notifications.error(`${tokenDoc.name} could not draw its weapon.`);
-                                return;
                             }
 
                             const mapPenalty = this.currentMap !== undefined ? this.currentMap : 0;
@@ -6930,7 +6939,23 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             if (mapPenalty === -5) variantIndex = 1;
                             if (mapPenalty === -10) variantIndex = 2;
 
-                            // 3. Prep the target list before rolling
+                            let strike = null;
+                            for (let attempts = 0; attempts < 20; attempts++) {
+                                const actionsList = tokenDoc.actor?.system?.actions;
+                                strike = actionsList?.find(a => a.item?.name?.includes("Thrall Strike") || a.slug?.includes("thrall-strike"));
+                                
+                                if (strike && strike.variants && strike.variants[variantIndex]) {
+                                    break; 
+                                }
+                                await new Promise(resolve => setTimeout(resolve, 100)); // Check again in 100ms
+                            }
+
+                            if (!strike || !strike.variants || !strike.variants[variantIndex]) {
+                                ui.notifications.error(`${tokenDoc.name} could not draw its weapon (Network Timeout).`);
+                                return;
+                            }
+
+ 
                             const targetsData = {};
                             validTargets.forEach(t => {
                                 targetsData[t.document.id] = {
