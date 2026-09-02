@@ -74,17 +74,40 @@ export function getThrallPresets(actor = null) {
 }
 
 export async function prepareThrallPayload(necroActor, presetId = "default") {
-    const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
-    if (!pack) {
-        ui.notifications.error("Could not find the Necromancer Thralls compendium pack.");
-        return null;
+
+    let protoActor = game.actors.find(a => a.name === "Thrall" && a.getFlag("necromancer-thrall-helper", "isBaseThrall"));
+
+    if (!protoActor) {
+        const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
+        if (!pack) {
+            ui.notifications.error("Could not find the Necromancer Thralls compendium pack.");
+            return null;
+        }
+
+        const index = await pack.getIndex();
+        const thrallEntry = index.find(a => a.name === "Thrall");
+        if (!thrallEntry) {
+            ui.notifications.error("Could not find the 'Thrall' actor in the compendium.");
+            return null;
+        }
+
+    
+        let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
+        if (!folder) {
+            folder = await Folder.create({
+                name: "Necromancer Thralls",
+                type: "Actor",
+                color: "#4b5563" 
+            });
+        }
+
+        protoActor = await game.actors.importFromCompendium(pack, thrallEntry._id, {
+            "flags.necromancer-thrall-helper.isBaseThrall": true,
+            folder: folder.id
+        });
+        console.log("Necromancer Thrall Helper | Base Thrall safely imported into its own folder.");
     }
 
-    const index = await pack.getIndex();
-    const thrallEntry = index.find(a => a.name === "Thrall");
-    if (!thrallEntry) return null;
-
-    const protoActor = await pack.getDocument(thrallEntry._id);
     const necroLevel = necroActor.level || 1;
     const damageDice = Math.max(1, Math.floor((necroLevel - 1) / 4) + 1);
     

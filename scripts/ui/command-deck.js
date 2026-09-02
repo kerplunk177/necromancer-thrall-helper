@@ -9209,7 +9209,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 let selections = [];
                                 let selectedUnique = new Set();
 
-                                // Pass 2: Prevent spawning two of the same unique thrall simultaneously
                                 for (let i = 0; i < count; i++) {
                                     const val = dialogForm.querySelector(`#preset-selector-${i}`).value;
                                     const preset = presets.find(p => p.id === val);
@@ -9230,6 +9229,24 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 document.body.style.cursor = "crosshair";
                                 canvas.app.view.style.cursor = "crosshair";
 
+
+                                const necroTokens = actor.getActiveTokens();
+                                let rangeIndicator = null;
+                                
+                                if (necroTokens.length > 0) {
+                                    const masterToken = necroTokens[0];
+                                    const rangeInPixels = (30 / canvas.scene.grid.distance) * canvas.grid.size;
+                                    
+                                    rangeIndicator = new PIXI.Graphics();
+                                    rangeIndicator.beginFill(0x22c55e, 0.08); // Very soft green tint
+                                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5); // Solid green border
+                                    rangeIndicator.drawCircle(masterToken.center.x, masterToken.center.y, rangeInPixels);
+                                    rangeIndicator.endFill();
+                                    rangeIndicator.zIndex = 998; 
+                                    
+                                    canvas.tokens.addChild(rangeIndicator);
+                                }
+      
                                 const gridSize = canvas.grid.size;
                                 const ghost = new PIXI.Graphics();
                                 ghost.beginFill(0x33ff33, 0.3);
@@ -9260,6 +9277,8 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     canvas.app.view.style.cursor = "";
                                     canvas.stage.off("pointermove", updateGhost);
                                     ghost.destroy();
+                    
+                                    if (rangeIndicator) rangeIndicator.destroy();
                                 };
 
                                 const interactionHandler = async (event) => {
@@ -9289,13 +9308,17 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     
                                     if (!basePayload) { cleanUp(); return; }
 
+                                    const ownerIds = Object.keys(actor.ownership).filter(k => actor.ownership[k] === 3 && k !== "default");
+                                    const newOwnership = { default: 0 };
+                                    ownerIds.forEach(id => newOwnership[id] = 3);
+                                    
+                                    newOwnership[game.user.id] = 3;
+
                                     const finalPayload = foundry.utils.mergeObject(basePayload, {
                                         x: spawnX,
                                         y: spawnY,
                                         delta: {
-                                            ownership: {
-                                                [game.user.id]: 3
-                                            }
+                                            ownership: newOwnership
                                         }
                                     });
 
