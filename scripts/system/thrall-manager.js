@@ -168,6 +168,56 @@ export async function prepareThrallPayload(necroActor, presetId = "default") {
             }
         }
     });
+   if (presetId === "default") {
+    const customImg = necroActor.getFlag("necromancer-thrall-helper", "defaultThrallImg");
+    const useRing = necroActor.getFlag("necromancer-thrall-helper", "defaultRingEnabled");
+    const imgScale = necroActor.getFlag("necromancer-thrall-helper", "defaultThrallScale");
 
-    return tokenData;
+    if (customImg) {
+        tokenData.texture.src = customImg;
+        if (tokenData.ring) {
+            tokenData.ring.subject = tokenData.ring.subject || {};
+            tokenData.ring.subject.texture = customImg;
+        }
+    }
+
+    if (useRing !== undefined) {
+        tokenData.ring = tokenData.ring || {};
+        tokenData.ring.enabled = useRing;
+    }
+
+    if (imgScale !== undefined) {
+        tokenData.texture.scaleX = imgScale;
+        tokenData.texture.scaleY = imgScale;
+        if (tokenData.ring && tokenData.ring.subject) {
+            tokenData.ring.subject.scale = imgScale;
+        }
+    }
+}
+// --- BONE FASCINATION: NIMBLE THRALLS ---
+const hasBoneFascination = necroActor.items.some(i => i.slug === "bone" || i.name === "Bone");
+    
+if (hasBoneFascination) {
+    tokenData.delta = tokenData.delta || {};
+    tokenData.delta.items = tokenData.delta.items || [];
+    
+    tokenData.delta.items.push({
+        name: "Effect: Bone Fascination",
+        type: "effect",
+        img: "icons/equipment/feet/shoes-simple-leather-brown.webp",
+        system: {
+            description: { value: "Your thralls are well constructed and nimble. They gain a +5 foot bonus to Speed." },
+            duration: { value: -1, unit: "unlimited" },
+            rules: [
+                {
+                    key: "FlatModifier",
+                    selector: "speed",
+                    value: 5,
+                    type: "untyped"
+                }
+            ]
+        }
+    });
+}
+return tokenData;
 }

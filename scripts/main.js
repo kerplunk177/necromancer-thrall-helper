@@ -17,16 +17,32 @@ Hooks.once("ready", () => {
     setupHooks();
 });
 
-// Injecting the quick-access button into the token HUD or scene controls
 Hooks.on("getSceneControlButtons", (controls) => {
     const thrallTool = {
         name: "thrall-command",
         title: "Open Thrall Command Deck",
         icon: "fas fa-skull",
-        visible: true,
+        visible: true, 
         button: true,
         onClick: () => {
-            new ThrallCommandDeck().render(true);
+            let isNecro = game.user.isGM;
+            
+            if (!isNecro && game.user.character) {
+                const actor = game.user.character;
+                const hasNecroClass = actor.items.some(i => i.type === "class" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
+                const hasNecroDedication = actor.items.some(i => i.type === "feat" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
+                isNecro = hasNecroClass || hasNecroDedication;
+            }
+
+            if (!isNecro) {
+                return ui.notifications.warn("You lack the dark blood and discipline required to command the dead.");
+            }
+
+            try {
+                new ThrallCommandDeck().render(true);
+            } catch (e) {
+                console.warn("Necromancer Helper | Command Deck failed to open:", e);
+            }
         }
     };
 

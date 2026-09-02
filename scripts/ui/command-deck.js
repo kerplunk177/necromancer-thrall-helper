@@ -4,8 +4,24 @@ import { executeSpawn, executeDelete, executeHazard, executeDamage } from "../sy
 
 
 
+export function getFascinations(actor) {
+    if (!actor) return [];
+    
+    const selections = actor.flags?.pf2e?.rulesSelections || {};
+    const fascinations = new Set();
 
+    if (selections.grimFascination) {
+        fascinations.add(selections.grimFascination.toLowerCase());
+    }
 
+    if (selections.widespreadFascination) {
+        fascinations.add(selections.widespreadFascination.toLowerCase());
+    } else if (selections["widespread-fascination"]) {
+        fascinations.add(selections["widespread-fascination"].toLowerCase());
+    }
+
+    return Array.from(fascinations);
+}
 Hooks.on("hoverToken", (token, hovered) => {
     if (!token?.id) return;
     const rows = document.querySelectorAll(`.thrall-row[data-token-id="${token.id}"]`);
@@ -180,7 +196,19 @@ Hooks.on("renderChatMessageHTML", (message, html) => {
         $html.find(".roll-damage-btn").remove();
     }
 });
+Hooks.on("deleteItem", async (itemDoc, options, userId) => {
+    if (game.user.id !== userId) return;
+    if (itemDoc.type !== "effect" || !itemDoc.getFlag("necromancer-thrall-helper", "isHazardTracker")) return;
 
+    const hazardId = itemDoc.getFlag("necromancer-thrall-helper", "hazardId");
+    const sceneId = itemDoc.getFlag("necromancer-thrall-helper", "sceneId");
+    
+    const targetScene = game.scenes.get(sceneId);
+    if (!targetScene) return;
+
+    const region = targetScene.regions.find(r => r.getFlag("necromancer-thrall-helper", "hazardId") === hazardId);
+    if (region) await region.delete();
+});
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     if (!game.user.isGM) return;
 
@@ -211,6 +239,74 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
         console.warn("Necromancer Helper | Could not locate master actor for thrall deletion.");
         return;
     }
+    // --- BLOOD FASCINATION: SANGUINE RETURN ---
+    const hasBloodFascination = masterActor.items.some(i => i.slug === "blood" || i.name === "Blood");
+    
+    if (hasBloodFascination) {
+        const currentHP = masterActor.system.attributes.hp.value;
+        const maxHP = masterActor.system.attributes.hp.max;
+        
+        const healAmount = Math.floor(((masterActor.level || 1) + 3) / 4);
+        const actualHealed = Math.min(maxHP - currentHP, healAmount);
+
+        if (actualHealed > 0) {
+            await masterActor.update({ "system.attributes.hp.value": currentHP + actualHealed });
+            
+            let necroToken = masterActor.getActiveTokens()[0] || canvas.tokens.placeables.find(t => t.actor?.id === masterActor.id);
+            if (necroToken && canvas.ready) {
+                canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP (Blood)`, { 
+                    anchor: CONST.TEXT_ANCHOR_POINTS.TOP, 
+                    fill: 0xef4444,
+                    direction: CONST.TEXT_ANCHOR_POINTS.UP 
+                });
+            }
+
+            await ChatMessage.create({
+                speaker: ChatMessage.getSpeaker({ actor: masterActor }),
+                flavor: `<strong>Sanguine Return</strong>`,
+                content: `
+                    <div style="background: rgba(0,0,0,0.3); padding: 6px; border-radius: 4px; border-left: 4px solid #ef4444;">
+                        <p style="margin: 0; font-size: 0.95em;">A thrall falls, and its infused blood rushes back to <b>${masterActor.name}</b>, restoring <b>${actualHealed} HP</b>.</p>
+                    </div>
+                `
+            });
+
+            console.log(`Necromancer Helper | Blood Fascination: Returned ${actualHealed} HP from destroyed thrall.`);
+        }
+    }
+// --- FLESH FASCINATION: GORY TERRAIN ---
+const hasFleshFascination = masterActor.items.some(i => i.slug === "flesh" || i.name === "Flesh");
+    
+if (hasFleshFascination) {
+    const tX = tokenDoc.x;
+    const tY = tokenDoc.y;
+    const tW = tokenDoc.width || 1;
+    const tH = tokenDoc.height || 1;
+
+    await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor: masterActor }),
+        flavor: `<strong>Flesh Fascination</strong>`,
+        content: `
+            <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #9ca3af;">
+                <p style="margin: 0 0 6px 0;"><b>${tokenDoc.name}</b> collapses into a heap of grotesque meat.</p>
+                <p style="margin: 0 0 8px 0; font-size: 0.9em; color: #ccc;">Do you want to leave behind difficult terrain (10 minutes)?</p>
+                <div style="text-align: center;">
+                    <button type="button" class="flesh-terrain-btn" data-x="${tX}" data-y="${tY}" data-w="${tW}" data-h="${tH}" data-master="${masterActor.id}" style="background: #1f2937; color: #d1d5db; border: 1px solid #4b5563; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
+                        <i class="fas fa-spider"></i> Leave Gory Remains
+                    </button>
+                </div>
+            </div>
+        `
+    });
+}
+
+
+
+
+
+
+
+
     const hasReinforced = masterActor.items.some(i => 
         /reinforced\s*skeleton/i.test(i.name) || i.slug === "reinforced-skeleton"
     );
@@ -254,7 +350,7 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     }
 
     const thickSkinItem = masterActor.items.find(i => 
-        /thick\s*skin/i.test(i.name) || i.slug === "thick-skin"
+        i.name === "Thick Skin" || i.slug === "thick-skin"
     );
 
     if (thickSkinItem && !window.SuppressThickSkin) {
@@ -777,7 +873,79 @@ Hooks.on("renderChatMessage", (message, html) => {
             default: "summon"
         }).render(true);
     });
+    $html.find(".flesh-terrain-btn").off("click").on("click", async (e) => {
+        e.preventDefault();
+        const $btn = $(e.currentTarget);
+        
+        const tX = parseFloat($btn.attr("data-x"));
+        const tY = parseFloat($btn.attr("data-y"));
+        const tW = parseFloat($btn.attr("data-w"));
+        const tH = parseFloat($btn.attr("data-h"));
+        const masterId = $btn.attr("data-master");
+        const masterActor = game.actors.get(masterId);
+        
+        if (!canvas.scene || !masterActor) return;
+        const gridSize = canvas.scene.grid.size;
+        const hazardId = foundry.utils.randomID();
+        
+        const regionData = {
+            name: "Gory Remains",
+            color: "#4b5563",
+            shapes: [{
+                type: "rectangle", hole: false,
+                x: tX, y: tY, width: tW * gridSize, height: tH * gridSize, rotation: 0
+            }],
+            elevation: { bottom: -1000, top: 1000 },
+            behaviors: [{
+                name: "Gory Difficult Terrain",
+                type: "modifyMovementCost",
+                system: {} // The empty system object works because PF2e will populate the defaults
+            }],
+            flags: {
+                "necromancer-thrall-helper": { isFleshTerrain: true, hazardId: hazardId }
+            }
+        };
 
+        const dummyDrawing = {
+            author: game.user.id,
+            shape: { type: "r", width: tW * gridSize, height: tH * gridSize },
+            x: tX,
+            y: tY,
+            hidden: true, 
+            flags: { "necromancer-thrall-helper": { hazardId: hazardId } }
+        };
+
+        const hazardResult = await executeHazard(regionData, dummyDrawing);
+        const createdRegion = Array.isArray(hazardResult) ? hazardResult[0] : hazardResult;
+
+        if (!createdRegion) {
+            return ui.notifications.error("Failed to place Gory Remains. Check GM socket.");
+        }
+
+        const trackerEffect = {
+            name: "Hazard: Gory Remains",
+            type: "effect",
+            img: "icons/magic/symbols/runes-star-pentagram-orange.webp",
+            system: {
+                description: { value: "Tracks the duration of a Gory Remains difficult terrain hazard. Deleting this will clear the hazard from the map." },
+                duration: { value: 10, unit: "minutes", expiry: "turn-start" }
+            },
+            flags: {
+                "necromancer-thrall-helper": { 
+                    isHazardTracker: true, 
+                    hazardId: hazardId,
+                    sceneId: canvas.scene.id
+                }
+            }
+        };
+        await masterActor.createEmbeddedDocuments("Item", [trackerEffect]);
+
+        $btn.closest('div').html(`
+            <p style="margin: 4px 0 0 0; text-align: center; color: #9ca3af; font-style: italic; font-size: 0.9em;">
+                <i class="fas fa-check"></i> Gory Remains Placed
+            </p>
+        `);
+    });
     $html.find(".blood-pool-spawn-btn").off("click").on("click", async (e) => {
         e.preventDefault();
         const $btn = $(e.currentTarget);
@@ -887,7 +1055,7 @@ Hooks.once("ready", () => {
             }
         }
         
-        if (name.includes("Thick Skin")) {
+        if (name === "Thick Skin" || name.startsWith("Thick Skin")) {
             payload.itemName = "Thick Skin";
             payload.hazardDamage = null;
             
@@ -994,7 +1162,7 @@ Hooks.once("ready", () => {
                 targetData.hasApplied = true;
             }
         }
-        if (originName.includes("Thick Skin")) {
+        if (originName === "Thick Skin" || originName.startsWith("Thick Skin")) {
             for (let [tokenId, targetData] of Object.entries(payload.targets)) {
                 if (targetData.hasApplied) continue;
                 const token = canvas.tokens.get(tokenId);
@@ -2830,6 +2998,16 @@ Hooks.on("renderChatMessage", (message, html) => {
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     if (game.user.id !== userId) return;
     
+    if (game.combat) {
+        const orphanedCombatants = game.combat.combatants.filter(c => c.tokenId === tokenDoc.id);
+        if (orphanedCombatants.length > 0) {
+            const ids = orphanedCombatants.map(c => c.id);
+            game.combat.deleteEmbeddedDocuments("Combatant", ids).catch(err => {
+                console.warn("Necromancer Helper | Ignored safe-delete warning:", err);
+            });
+        }
+    }
+    
     // 1. Song of the Soul Tracker
     const isInstrument = tokenDoc.actor?.items.some(i => i.name === "Effect: Song Instrument");
     if (isInstrument && canvas.scene) {
@@ -3798,6 +3976,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     }
 
     async _prepareContext(options) {
+        const context = await super._prepareContext(options);
+        context.canBrowse = game.user.hasPermission("FILES_BROWSE");
+       
         const actor = game.actors.get(this.necroId);
         let damageScale = "1d6";
         if (actor) {
@@ -3805,7 +3986,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             const dice = Math.max(1, Math.floor((necroLevel - 1) / 4) + 1);
             damageScale = `${dice}d6`;
         }
-
+        
         const mapPenalty = this.currentMap !== undefined ? this.currentMap : 0;
         
         let activeThralls = [];
@@ -3875,7 +4056,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     imgPath = this.imageCache[t.id];
                 }
                 
-                // UNBREAKABLE GRAVEYARD CHECK: Just read the physical name of the token.
                 const isGraveyard = t.name.includes("Living Graveyard");
 
                 return {
@@ -3920,7 +4100,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             const spellRank = Math.ceil((actor?.level || 1) / 2);
             tendrilCount = 3 + Math.floor(Math.max(0, spellRank - 3) / 3);
         }
-
+        const hasSpiritFascination = actor?.items.some(i => i.slug === "spirit" || i.name === "Spirit") || false;
         const hasBoneBurst = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("bone burst") || (i.system?.slug && i.system.slug.includes("bone-burst")))) || false;
         const hasCollateral = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("collateral reinforcement") || (i.system?.slug && i.system.slug.includes("collateral-reinforcement")))) || false;
         const hasReclaimPower = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("reclaim power") || (i.system?.slug && i.system.slug.includes("reclaim-power")))) || false;
@@ -3959,8 +4139,10 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
         return {
             hasDeathlyScream: hasDeathlyScream,
+            canBrowse: game.user.hasPermission("FILES_BROWSE"),
             hasBindHeroicSpirit: hasBindHeroicSpirit,
             hasRecurringNightmare: hasRecurringNightmare,
+            hasSpiritFascination: hasSpiritFascination,
             canSustainNightmare: hasRecurringNightmare && nightmareDestroyed && !activeNightmare,
             canConjureNightmare: hasRecurringNightmare && !activeNightmare && !nightmareDestroyed,
             hasSkeletalLancers: hasSkeletalLancers,
@@ -4007,7 +4189,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             activeHordeCount: activeHordes.length,
             hasBlossomingGore: hasBlossomingGore,
             hasInstantArmy: hasInstantArmy,
-    instantArmyUsed: actor?.getFlag("necromancer-thrall-helper", "instantArmyUsed") || false,
+            instantArmyUsed: actor?.getFlag("necromancer-thrall-helper", "instantArmyUsed") || false,
             activeGoreCount: activeGores.length
         };
     }
@@ -4016,6 +4198,77 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
+
+
+
+
+        {
+            // Initialize state tracker if it doesn't exist so it survives re-renders
+            this.spiritStates = this.spiritStates || {};
+
+            // Show/Hide Spirit Toggle based on dropdown selection
+            const spiritDropdowns = html.querySelectorAll('.action-dropdown');
+            spiritDropdowns.forEach(dropdown => {
+                const thrallRow = dropdown.closest('.thrall-row');
+                const thrallId = thrallRow.getAttribute('data-token-id');
+                const toggleGroup = thrallRow.querySelector('.spirit-toggle-group');
+                
+                const updateToggle = () => {
+                    if (!toggleGroup) return; 
+                    const val = dropdown.value;
+                    if (val === 'strike' || val === 'charge' || val === 'conglomerate-charge') {
+                        toggleGroup.style.display = 'flex';
+                    } else {
+                        toggleGroup.style.display = 'none';
+                    }
+                };
+                
+                dropdown.addEventListener('change', updateToggle);
+                updateToggle(); 
+
+                if (toggleGroup) {
+                    const savedType = this.spiritStates[thrallId] || 'physical';
+                    const targetBtn = toggleGroup.querySelector(`[data-type="${savedType}"]`);
+                    if (targetBtn) {
+                        toggleGroup.querySelectorAll('.spirit-dmg-btn').forEach(b => {
+                            b.classList.remove('active');
+                            b.style.background = '#222';
+                            b.style.color = '#999';
+                        });
+                        targetBtn.classList.add('active');
+                        targetBtn.style.background = savedType === 'spirit' ? '#0ea5e9' : savedType === 'void' ? '#7e22ce' : '#555';
+                        targetBtn.style.color = '#fff';
+                    }
+                }
+            });
+
+            const spiritBtns = html.querySelectorAll('.spirit-dmg-btn');
+            spiritBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const group = btn.closest('.spirit-toggle-group');
+                    const thrallId = btn.closest('.thrall-row').getAttribute('data-token-id');
+                    const type = btn.getAttribute('data-type');
+                    
+                    this.spiritStates[thrallId] = type;
+                    
+                    group.querySelectorAll('.spirit-dmg-btn').forEach(b => {
+                        b.classList.remove('active');
+                        b.style.background = '#222';
+                        b.style.color = '#999';
+                    });
+                    
+                    let activeBg = '#555'; 
+                    if (type === 'spirit') activeBg = '#0ea5e9'; 
+                    if (type === 'void') activeBg = '#7e22ce'; 
+                    
+                    btn.classList.add('active');
+                    btn.style.background = activeBg;
+                    btn.style.color = '#fff';
+                });
+            });
+        }
+
 
 
         const reanimateBtn = html.querySelector(".reanimate-foe-btn");
@@ -4215,7 +4468,80 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 }).render(true);
             });
         }
+        const imgBtn = html.querySelector(".set-default-img-btn");
+        if (imgBtn) {
+            imgBtn.addEventListener("click", async (e) => {
+                e.preventDefault();
+                const actor = game.actors.get(this.necroId) || game.user.character;
+                if (!actor) return;
 
+                const currentImg = actor.getFlag("necromancer-thrall-helper", "defaultThrallImg") || "";
+                const useRing = actor.getFlag("necromancer-thrall-helper", "defaultRingEnabled") ?? true;
+                const imgScale = actor.getFlag("necromancer-thrall-helper", "defaultThrallScale") ?? 1.0;
+
+                const formHtml = `
+                    <form autocomplete="off" style="margin-bottom: 10px;">
+                        <p>Configure the default thrall appearance and token ring settings.</p>
+                        <div class="form-group" style="display: flex; gap: 5px; margin-bottom: 15px; align-items: center;">
+                            <label style="flex: 1;">Image:</label>
+                            <input type="text" id="thrall-img-path" value="${currentImg}" style="flex: 3; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #555;">
+                            <button type="button" id="thrall-img-picker" style="flex: 0 0 30px; height: 26px; line-height: 1; padding: 0;"><i class="fas fa-file-import"></i></button>
+                        </div>
+                        <div class="form-group" style="display: flex; justify-content: space-between; margin-bottom: 5px; align-items: center;">
+                            <label>Enable Token Ring:</label>
+                            <input type="checkbox" id="thrall-ring-enabled" ${useRing ? "checked" : ""}>
+                        </div>
+                        <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;">
+                            <label>Image Scale:</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="range" id="thrall-img-scale" min="0.5" max="3" step="0.1" value="${imgScale}" style="width: 100px;">
+                                <span id="thrall-scale-val" style="min-width: 25px; text-align: right;">${imgScale}</span>
+                            </div>
+                        </div>
+                    </form>
+                `;
+
+                new Dialog({
+                    title: "Default Thrall Config",
+                    content: formHtml,
+                    render: (dialogHtml) => {
+                        // Hook up the FilePicker
+                        dialogHtml.find("#thrall-img-picker").on("click", (evt) => {
+                            evt.preventDefault();
+                            new FilePicker({
+                                type: "image",
+                                current: dialogHtml.find("#thrall-img-path").val(),
+                                callback: (path) => dialogHtml.find("#thrall-img-path").val(path)
+                            }).render(true);
+                        });
+
+                        // Make the slider number update in real time
+                        dialogHtml.find("#thrall-img-scale").on("input", (evt) => {
+                            dialogHtml.find("#thrall-scale-val").text(evt.target.value);
+                        });
+                    },
+                    buttons: {
+                        save: {
+                            icon: '<i class="fas fa-save"></i>',
+                            label: "Save Config",
+                            callback: async (dialogHtml) => {
+                                const newImg = dialogHtml.find("#thrall-img-path").val();
+                                const newRing = dialogHtml.find("#thrall-ring-enabled").is(":checked");
+                                const newScale = parseFloat(dialogHtml.find("#thrall-img-scale").val());
+
+                                await actor.setFlag("necromancer-thrall-helper", "defaultThrallImg", newImg);
+                                await actor.setFlag("necromancer-thrall-helper", "defaultRingEnabled", newRing);
+                                await actor.setFlag("necromancer-thrall-helper", "defaultThrallScale", newScale);
+                                
+                                ui.notifications.info("Default thrall configuration updated.");
+                            }
+                        },
+                        cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                    },
+                    default: "save"
+                }).render(true);
+            });
+        }
 
 
 
@@ -4297,14 +4623,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
                     const tokenDoc = await lancerActor.getTokenDocument({ x: snapped.x, y: snapped.y });
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                        name: `Skeletal Lancer ${currentSpawnIndex + 1}`,
-                        flags: {
-                            "necromancer-thrall-helper": {
-                                masterId: actor.id,
-                                isSkeletalLancer: true
-                            }
-                        },
-                        delta: { ownership: { [game.user.id]: 3 } }
+                        actorLink: false, 
+                        ownership: { [game.user.id]: 3 }, 
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        delta: { 
+                            ownership: { [game.user.id]: 3 }, 
+                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
+                        }
                     });
 
                     currentSpawnIndex++;
@@ -4403,13 +4728,13 @@ if (nightmareBtn) {
             const tokenDoc = await nightmareActor.getTokenDocument({ x: snapped.x, y: snapped.y });
 
             const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                flags: {
-                    "necromancer-thrall-helper": {
-                        masterId: actor.id,
-                        isRecurringNightmare: true
-                    }
-                },
-                delta: { ownership: { [game.user.id]: 3 } }
+                actorLink: false, 
+                ownership: { [game.user.id]: 3 }, 
+                flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                delta: { 
+                    ownership: { [game.user.id]: 3 }, 
+                    system: { attributes: { hp: { value: totalHP, max: totalHP } } }
+                }
             });
 
             const [createdToken] = await executeSpawn(finalPayload);
@@ -4441,6 +4766,49 @@ if (nightmareBtn) {
             });
         });
     });
+ 
+    if (!html.querySelector(".dismiss-all-btn")) {
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = `<button type="button" class="dismiss-all-btn" style="margin-top: 15px; width: 100%; padding: 6px;">Dismiss All Thralls</button>`;
+        html.appendChild(tempDiv.firstElementChild);
+    }
+
+    const dismissBtn = html.querySelector(".dismiss-all-btn");
+    if (dismissBtn) {
+        dismissBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            dismissBtn.disabled = true;
+
+            const actor = game.actors.get(this.necroId) || game.user.character;
+
+            try {
+                for (const combat of game.combats) {
+                    const badIds = combat.combatants.filter(c => {
+                        if (!c.actor || !c.token || !canvas.scene.tokens.get(c.tokenId)) return true;
+                        if (actor && c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
+                        return false;
+                    }).map(c => c.id);
+
+                    if (badIds.length > 0) {
+                        await combat.deleteEmbeddedDocuments("Combatant", badIds);
+                    }
+                }
+
+                if (canvas.scene && actor) {
+                    const thrallIds = canvas.scene.tokens.filter(t => 
+                        t.getFlag("necromancer-thrall-helper", "masterId") === actor.id
+                    ).map(t => t.id);
+
+                    if (thrallIds.length > 0) {
+                        await canvas.scene.deleteEmbeddedDocuments("Token", thrallIds);
+                    }
+                }
+            } finally {
+                dismissBtn.disabled = false;
+                this.render(false);
+            }
+        });
+    }
 }
 const endNightmareBtn = html.querySelector(".end-nightmare-btn");
         if (endNightmareBtn) {
@@ -5705,6 +6073,15 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     const spellRank = passedSpellRank || Math.max(1, Math.ceil(necroLevel / 2));
 
                     let damageType = "bludgeoning";
+                    
+                    const hasSpiritFascination = actor.items.some(i => i.slug === "spirit" || i.name === "Spirit");
+                    if (hasSpiritFascination && this.spiritStates && this.spiritStates[tokenId]) {
+                        const savedState = this.spiritStates[tokenId];
+                        if (savedState === "spirit" || savedState === "void") {
+                            damageType = savedState;
+                        }
+                    }
+                    
                     if (isNightmare) damageType = "void";
                     if (isLancer) damageType = "piercing";
 
@@ -5716,8 +6093,18 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     if (isGraveyard && chargeDice > 0) totalChargeDice += 3;
                     if (isPerfected && chargeDice > 0) totalChargeDice += 6;
 
-                    // 1. Request the weapon if it doesn't exist
                     let existingWeapon = tokenDoc.actor.items.find(i => i.type === "melee" && i.name.includes("Thrall Strike"));
+                    
+                    if (existingWeapon) {
+                        const rollKeys = Object.keys(existingWeapon.system.damageRolls || {});
+                        const currentType = rollKeys.length > 0 ? existingWeapon.system.damageRolls[rollKeys[0]].damageType : null;
+                        
+                        if (currentType !== damageType) {
+                            await existingWeapon.delete();
+                            existingWeapon = null; 
+                        }
+                    }
+
                     if (!existingWeapon) {
                         let attackMod = Math.floor(necroLevel * 1.5); 
                         const spellcasting = actor.spellcasting?.filter(s => s.statistic)?.sort((a,b) => b.statistic.check.mod - a.statistic.check.mod)[0];
@@ -5735,8 +6122,17 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             }
                         };
                         await tokenDoc.actor.createEmbeddedDocuments("Item", [weaponData]);
+                    } else {
+                        const rollKeys = Object.keys(existingWeapon.system.damageRolls || {});
+                        if (rollKeys.length > 0) {
+                            const firstKey = rollKeys[0]; // PF2e might use 'base' or a random string ID
+                            if (existingWeapon.system.damageRolls[firstKey].damageType !== damageType) {
+                                await existingWeapon.update({
+                                    [`system.damageRolls.${firstKey}.damageType`]: damageType
+                                });
+                            }
+                        }
                     }
-
                     // 2. Request the charge buff if needed
                     let addedEffectIds = [];
                     if (totalChargeDice > 0) {
@@ -6763,13 +7159,11 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         else if (spellRank >= 2) chargeDice = 2;
 
                         const executeConglomerate = async (isKamikaze) => {
-                            // 0. Clean up stale effects so damage math isn't doubled from previous clicks
                             const staleEffects = tokenDoc.actor.items.filter(i => i.name.includes("Thrall Charge"));
                             if (staleEffects.length > 0) {
                                 await tokenDoc.actor.deleteEmbeddedDocuments("Item", staleEffects.map(i => i.id));
                             }
 
-                            // 1. Arm the Conglomerate
                             let existingWeapon = tokenDoc.actor.items.find(i => i.type === "melee" && i.name.includes("Thrall Strike"));
                             if (!existingWeapon) {
                                 let attackMod = Math.floor(necroLevel * 1.5); 
@@ -6790,7 +7184,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 await tokenDoc.actor.createEmbeddedDocuments("Item", [weaponData]);
                             }
 
-                            // 2. Apply the fresh Thrall Charge Buff
                             let addedEffectIds = [];
                             if (chargeDice > 0) {
                                 const rules = [{
@@ -9032,11 +9425,13 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     const tokenDoc = await conglomActor.getTokenDocument({ x: spawnX, y: spawnY });
                     
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                        actorData: {
-                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
-                        },
+                        actorLink: false, 
+                        ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
-                        delta: { ownership: { [game.user.id]: 3 } }
+                        delta: { 
+                            ownership: { [game.user.id]: 3 }, 
+                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
+                        }
                     });
 
                     executeSpawn(finalPayload).then(() => {
@@ -9174,16 +9569,12 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     const tokenDoc = await tendrilActor.getTokenDocument({ x: spawnX, y: spawnY });
 
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                        flags: { 
-                            "necromancer-thrall-helper": { 
-                                masterId: actor.id,
-                                tendrilTetherId: tetherId 
-                            } 
-                        },
-                        delta: {
-                            ownership: {
-                                [game.user.id]: 3
-                            }
+                        actorLink: false, 
+                        ownership: { [game.user.id]: 3 }, 
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        delta: { 
+                            ownership: { [game.user.id]: 3 }, 
+                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
                         }
                     });
 

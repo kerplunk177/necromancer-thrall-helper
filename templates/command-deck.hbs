@@ -135,6 +135,11 @@
         <button type="button" class="edit-portfolio-btn" title="Edit Thrall Portfolio">
             <i class="fas fa-book-dead"></i> Portfolio
         </button>
+        {{#if canBrowse}}
+<button type="button" class="set-default-img-btn custom-css-class-here">
+    <i class="fas fa-image"></i> Set Default Thrall Look
+</button>
+{{/if}}
         {{#if hasHallowedEarth}}
         <button type="button" class="hallowed-btn flavor-spirit">
             <i class="fas fa-sun"></i> {{#if isHallowedActive}}Dismiss Hallowed{{else}}Hallowed Earth{{/if}}
@@ -218,6 +223,15 @@
                             {{#if ../hasBoneSpear}}<option value="bone-spear">Bone Spear</option>{{/if}}
                             {{#if ../hasBloodInfusion}}<option value="blood-infusion">Blood Infusion</option>{{/if}}
                         </select>
+                        
+                        {{#if ../hasSpiritFascination}}
+                        <div class="spirit-toggle-group" style="display: none; gap: 0; margin-top: -2px;">
+                            <button type="button" class="spirit-dmg-btn active" data-type="physical" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 4px 0 0 4px; background: #555; color: #fff; border: 1px solid #444; border-right: none;">Phys</button>
+                            <button type="button" class="spirit-dmg-btn" data-type="spirit" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 0; background: #222; color: #999; border: 1px solid #444; border-right: none;">Spirit</button>
+                            <button type="button" class="spirit-dmg-btn" data-type="void" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 0 4px 4px 0; background: #222; color: #999; border: 1px solid #444;">Void</button>
+                        </div>
+                        {{/if}}
+                        
                         <div class="thrall-btn-row">
                             <button type="button" class="execute-btn" title="Execute Action"><i class="fas fa-play"></i> Execute</button>
                             <button type="button" class="kill-btn" title="Dismiss Thrall"><i class="fas fa-skull"></i> Dismiss</button>
