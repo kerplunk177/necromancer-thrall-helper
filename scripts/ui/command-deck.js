@@ -725,32 +725,56 @@ Hooks.on("updateActor", async (actor, changes, options, userId) => {
         });
     }
 });
-Hooks.on("createChatMessage", async (message) => {
+// --- SAFELY WRAP PF2E'S DAMAGE ENGINE ---
+Hooks.once("ready", () => {
+    if (CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped) return;
+    
+    const originalApplyDamage = CONFIG.Actor.documentClass.prototype.applyDamage;
+    CONFIG.Actor.documentClass.prototype.applyDamage = async function(options) {
+        // Snapshot HP before damage
+        const preHp = this.system?.attributes?.hp?.value || 0;
+        
+        // Let PF2e process the damage normally
+        const result = await originalApplyDamage.call(this, options);
+        
+        // Check if HP actually dropped
+        const postHp = this.system?.attributes?.hp?.value || 0;
+        const hpLost = preHp - postHp;
+        
+        if (hpLost > 0) {
+            Hooks.callAll("necroHelperDamageApplied", this, options, hpLost);
+        }
+        
+        return result;
+    };
+    CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped = true;
+});
+
+// --- BLOOD POOL: ONLY TRIGGER ON ACTUAL HP LOSS ---
+Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
     if (!game.user.isGM) return;
 
-    const pf2eFlags = message.flags?.pf2e || {};
-    const context = pf2eFlags.context || {};
-    if (context.type !== "damage-roll") return;
-
-
-    const isBleed = (context.options || []).some(o => o.includes("damage:type:bleed") || o.includes("bleed"));
-    const hasBleedInstance = message.rolls?.[0]?.instances?.some(i => i.type === "bleed");
-    if (!isBleed && !hasBleedInstance) return;
-
-
-    let targetToken = canvas.tokens.get(context.target?.token);
-    if (!targetToken && message.speaker?.token) {
-        targetToken = canvas.tokens.get(message.speaker.token);
+    // Hunt for the bleed trait in the damage payload
+    let isBleed = false;
+    
+    if (options.damage?.instances && Array.isArray(options.damage.instances)) {
+        if (options.damage.instances.some(i => i.type === "bleed")) isBleed = true;
     }
-    if (!targetToken && message.speaker?.actor) {
-        targetToken = game.actors.get(message.speaker.actor)?.getActiveTokens()[0];
+    if (options.rollOptions && typeof options.rollOptions.has === "function") {
+        if (options.rollOptions.has("damage:type:bleed")) isBleed = true;
     }
+    if (options.item && options.item.system?.traits?.value) {
+        if (options.item.system.traits.value.includes("bleed")) isBleed = true;
+    }
+
+    if (!isBleed) return;
+
+    let targetToken = options.token?.object || actor.getActiveTokens()[0];
     if (!targetToken?.actor) return;
 
     const traits = targetToken.actor.system?.traits?.value || [];
     const hasNoBlood = traits.includes("construct") || traits.includes("elemental") || (traits.includes("undead") && !targetToken.actor.items.some(i => i.name === "Infused Blood"));
     if (hasNoBlood) return;
-
 
     const necros = canvas.tokens.placeables.filter(t => {
         if (!t.actor || !t.actor.hasPlayerOwner) return false;
@@ -787,7 +811,6 @@ Hooks.on("createChatMessage", async (message) => {
         }
     }
 });
-
 Hooks.on("renderChatMessage", (message, html) => {
     const $html = html instanceof jQuery ? html : $(html);
 
@@ -7320,7 +7343,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             let cgSpell = actor.items.find(i => i.type === "spell" && i.name === "Conglomerate Grab");
                             const spellSystemData = {
                                 level: { value: spellRank },
-                                traits: { value: ["necromancer", "manipulate", "concentrate"] },
+                                traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
                                 tradition: { value: "divine" },
                                 defense: { save: { statistic: "fortitude", basic: false, dc: { value: exactDC } } }
                             };
@@ -7504,7 +7527,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                                         const spellSystemData = {
                                             level: { value: spellRank },
-                                            traits: { value: ["necromancer", "manipulate", "concentrate"] },
+                                            traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
                                             tradition: { value: "divine" },
                                             defense: { save: { statistic: "fortitude", basic: false, dc: { value: exactDC } } }
                                         };
@@ -7523,7 +7546,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         } else {
                                             await bgSpell.update({
                                                 "system.level.value": spellRank,
-                                                "system.traits.value": ["necromancer", "manipulate", "concentrate"],
+                                                "system.traits.value": ["necromancer", "manipulate", "concentrate", "focus", "uncommon"],
                                                 "system.tradition.value": "divine",
                                                 "system.defense.save.statistic": "fortitude",
                                                 "system.defense.save.basic": false,
@@ -8001,7 +8024,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         let bbSpell = actor.items.find(i => ["spell", "feat", "action"].includes(i.type) && i.name === "Bone Burst");
                         const spellSystemData = {
                             level: { value: Math.ceil(necroLevel / 2) },
-                            traits: { value: ["necromancer", "occult", "concentrate"] },
+                            traits: { value: ["necromancer", "occult", "concentrate", "focus", "uncommon"] },
                             tradition: { value: "occult" },
                             defense: { save: { statistic: "reflex", basic: true, dc: { value: exactDC } } },
                             damage: { "0": { formula: `${diceCount}d10`, type: "piercing" } }
@@ -8511,10 +8534,10 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         }
 
                         let bombSpell = actor.items.find(i => i.type === "spell" && i.name === "Necrotic Bomb");
-                    const spellSystemData = {
-                        level: { value: bombRank },
-                        traits: { value: ["necromancer", "manipulate", "concentrate", "void"] },
-                        tradition: { value: "divine" },
+                        const spellSystemData = {
+                            level: { value: bombRank },
+                            traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "void"] },
+                            tradition: { value: "divine" },
                         area: { type: "emanation", value: 10 },
                         target: { value: "creatures" }, // <--- CRITICAL: Tells the system it targets creatures
                         defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
