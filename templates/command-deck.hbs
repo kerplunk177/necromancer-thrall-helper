@@ -224,13 +224,28 @@
                             {{#if ../hasBloodInfusion}}<option value="blood-infusion">Blood Infusion</option>{{/if}}
                         </select>
                         
-                        {{#if ../hasSpiritFascination}}
-                        <div class="spirit-toggle-group" style="display: none; gap: 0; margin-top: -2px;">
-                            <button type="button" class="spirit-dmg-btn active" data-type="physical" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 4px 0 0 4px; background: #555; color: #fff; border: 1px solid #444; border-right: none;">Phys</button>
-                            <button type="button" class="spirit-dmg-btn" data-type="spirit" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 0; background: #222; color: #999; border: 1px solid #444; border-right: none;">Spirit</button>
-                            <button type="button" class="spirit-dmg-btn" data-type="void" style="flex: 1; font-size: 0.8em; padding: 2px; border-radius: 0 4px 4px 0; background: #222; color: #999; border: 1px solid #444;">Void</button>
-                        </div>
-                        {{/if}}
+                        <div class="spirit-toggle-group" style="display: none; justify-content: center; gap: 6px; margin-top: 6px;">
+    <!-- Physical Types -->
+    <button class="spirit-dmg-btn active" data-type="bludgeoning" style="background: #555; color: #fff; border: 1px solid #222; width: 36px; height: 32px; padding: 0; border-radius: 4px; font-size: 1.1em;" title="Bludgeoning">
+        <i class="fas fa-hammer"></i>
+    </button>
+    <button class="spirit-dmg-btn" data-type="piercing" style="background: #222; color: #999; border: 1px solid #222; width: 36px; height: 32px; padding: 0; border-radius: 4px; font-size: 1.1em;" title="Piercing">
+        <i class="fas fa-location-arrow"></i>
+    </button>
+    <button class="spirit-dmg-btn" data-type="slashing" style="background: #222; color: #999; border: 1px solid #222; width: 36px; height: 32px; padding: 0; border-radius: 4px; font-size: 1.1em;" title="Slashing">
+        <i class="fas fa-sword"></i>
+    </button>
+    
+    <!-- Magical Types (Requires Fascination) - Note the ../ scope! -->
+    {{#if ../hasSpiritFascination}}
+    <button class="spirit-dmg-btn" data-type="spirit" style="background: #222; color: #999; border: 1px solid #222; width: 36px; height: 32px; padding: 0; border-radius: 4px; font-size: 1.1em;" title="Spirit">
+        <i class="fas fa-ghost"></i>
+    </button>
+    <button class="spirit-dmg-btn" data-type="void" style="background: #222; color: #999; border: 1px solid #222; width: 36px; height: 32px; padding: 0; border-radius: 4px; font-size: 1.1em;" title="Void">
+        <i class="fas fa-skull"></i>
+    </button>
+    {{/if}}
+</div>
                         
                         <div class="thrall-btn-row">
                             <button type="button" class="execute-btn" title="Execute Action"><i class="fas fa-play"></i> Execute</button>

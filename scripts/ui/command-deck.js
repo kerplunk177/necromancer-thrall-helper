@@ -2583,7 +2583,8 @@ Hooks.on("renderChatMessage", (message, html) => {
                     e.preventDefault();
                     if (!game.user.isGM && !attackerToken?.isOwner) return;
 
-                    const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attackerActor.id;
+                    // CRITICAL TYPO FIX: Changed attackerActor.id to attacker.id
+                    const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attacker.id;
                     const masterActor = game.actors.get(masterId) || game.user.character;
 
                     if (globalThis.NecroThrallHelper?.executeSheddingMatrix) {
@@ -3065,6 +3066,12 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
         for (const r of regions) await r.delete();
         const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
         for (const d of drawings) await d.delete();
+    }
+    // 3. Living Graveyard Cleanup
+    const gyTemplateId = tokenDoc.getFlag("necromancer-thrall-helper", "graveyardTemplateId");
+    if (gyTemplateId && canvas.scene) {
+        const tmpl = canvas.scene.templates.get(gyTemplateId);
+        if (tmpl) await tmpl.delete();
     }
 });
 Hooks.on("pf2e.endTurn", async (combatant, combat, userId) => {
@@ -4123,7 +4130,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             const spellRank = Math.ceil((actor?.level || 1) / 2);
             tendrilCount = 3 + Math.floor(Math.max(0, spellRank - 3) / 3);
         }
-        const hasSpiritFascination = actor?.items.some(i => i.slug === "spirit" || i.name === "Spirit") || false;
+        const hasSpiritFascination = actor?.items.some(i => i.slug === "spirit" || i.name === "Spirit" || i.name.includes("Spirit Fascination")) || (actor?.flags?.pf2e?.rulesSelections?.grimFascination === "spirit") || (actor?.flags?.pf2e?.rulesSelections?.widespreadFascination === "spirit") || false;
         const hasBoneBurst = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("bone burst") || (i.system?.slug && i.system.slug.includes("bone-burst")))) || false;
         const hasCollateral = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("collateral reinforcement") || (i.system?.slug && i.system.slug.includes("collateral-reinforcement")))) || false;
         const hasReclaimPower = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("reclaim power") || (i.system?.slug && i.system.slug.includes("reclaim-power")))) || false;
@@ -4221,7 +4228,62 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
+            // --- CUSTOM VISUALS HELPER ---
+        const applyCustomVisuals = (payload, actor, typePrefix) => {
+            const img = actor.getFlag("necromancer-thrall-helper", `${typePrefix}Img`);
+            const useRing = actor.getFlag("necromancer-thrall-helper", `${typePrefix}Ring`);
+            const scale = actor.getFlag("necromancer-thrall-helper", `${typePrefix}Scale`);
 
+            if (img) {
+                payload.texture = payload.texture || {};
+                payload.texture.src = img;
+                if (payload.ring) {
+                    payload.ring.subject = payload.ring.subject || {};
+                    payload.ring.subject.texture = img;
+                }
+            }
+            if (useRing !== undefined) {
+                payload.ring = payload.ring || {};
+                payload.ring.enabled = useRing;
+            }
+            if (scale !== undefined) {
+                payload.texture = payload.texture || {};
+                payload.texture.scaleX = scale;
+                payload.texture.scaleY = scale;
+                if (payload.ring && payload.ring.subject) {
+                    payload.ring.subject.scale = scale;
+                }
+            }
+            return payload;
+        };
+
+        // --- AUTO-IMPORT HELPER ---
+        const getOrImportActor = async (actorName) => {
+            let actor = game.actors.find(a => a.name === actorName);
+            if (actor) return actor;
+
+            const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
+            if (!pack) {
+                ui.notifications.error("Could not find the Necromancer Thralls compendium pack.");
+                return null;
+            }
+
+            const index = await pack.getIndex();
+            const entry = index.find(a => a.name === actorName);
+            if (!entry) {
+                ui.notifications.error(`Could not find '${actorName}' in the compendium.`);
+                return null;
+            }
+
+            let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
+            if (!folder) {
+                folder = await Folder.create({ name: "Necromancer Thralls", type: "Actor", color: "#4b5563" });
+            }
+
+            actor = await game.actors.importFromCompendium(pack, entry._id, { folder: folder.id });
+            console.log(`Necromancer Helper | ${actorName} automatically imported into world actors.`);
+            return actor;
+        };
 
 
 
@@ -4229,11 +4291,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             // Initialize state tracker if it doesn't exist so it survives re-renders
             this.spiritStates = this.spiritStates || {};
 
-            // Show/Hide Spirit Toggle based on dropdown selection
+            // Show/Hide Damage Toggle based on dropdown selection
             const spiritDropdowns = html.querySelectorAll('.action-dropdown');
             spiritDropdowns.forEach(dropdown => {
                 const thrallRow = dropdown.closest('.thrall-row');
                 const thrallId = thrallRow.getAttribute('data-token-id');
+                // We kept the 'spirit-toggle-group' class name so we didn't have to rewrite your CSS
                 const toggleGroup = thrallRow.querySelector('.spirit-toggle-group');
                 
                 const updateToggle = () => {
@@ -4249,8 +4312,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 dropdown.addEventListener('change', updateToggle);
                 updateToggle(); 
 
+                // Reapply saved state for this specific thrall, or default to bludgeoning
                 if (toggleGroup) {
-                    const savedType = this.spiritStates[thrallId] || 'physical';
+                    const savedType = this.spiritStates[thrallId] || 'bludgeoning';
                     const targetBtn = toggleGroup.querySelector(`[data-type="${savedType}"]`);
                     if (targetBtn) {
                         toggleGroup.querySelectorAll('.spirit-dmg-btn').forEach(b => {
@@ -4259,12 +4323,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             b.style.color = '#999';
                         });
                         targetBtn.classList.add('active');
-                        targetBtn.style.background = savedType === 'spirit' ? '#0ea5e9' : savedType === 'void' ? '#7e22ce' : '#555';
+                        
+                        let activeBg = '#555'; 
+                        if (savedType === 'spirit') activeBg = '#0ea5e9'; 
+                        if (savedType === 'void') activeBg = '#7e22ce'; 
+                        
+                        targetBtn.style.background = activeBg;
                         targetBtn.style.color = '#fff';
                     }
                 }
             });
 
+            // Handle the 5-way damage toggle clicks
             const spiritBtns = html.querySelectorAll('.spirit-dmg-btn');
             spiritBtns.forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -4273,14 +4343,17 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     const thrallId = btn.closest('.thrall-row').getAttribute('data-token-id');
                     const type = btn.getAttribute('data-type');
                     
+                    // Save to class state so it remembers between strikes
                     this.spiritStates[thrallId] = type;
                     
+                    // Reset all siblings
                     group.querySelectorAll('.spirit-dmg-btn').forEach(b => {
                         b.classList.remove('active');
                         b.style.background = '#222';
                         b.style.color = '#999';
                     });
                     
+                    // Activate clicked button
                     let activeBg = '#555'; 
                     if (type === 'spirit') activeBg = '#0ea5e9'; 
                     if (type === 'void') activeBg = '#7e22ce'; 
@@ -4498,65 +4571,105 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 const actor = game.actors.get(this.necroId) || game.user.character;
                 if (!actor) return;
 
-                const currentImg = actor.getFlag("necromancer-thrall-helper", "defaultThrallImg") || "";
-                const useRing = actor.getFlag("necromancer-thrall-helper", "defaultRingEnabled") ?? true;
-                const imgScale = actor.getFlag("necromancer-thrall-helper", "defaultThrallScale") ?? 1.0;
+                // Map exactly where these are saved on the actor
+                const configKeys = {
+                    "thrall": { label: "Base Thrall", img: "defaultThrallImg", ring: "defaultRingEnabled", scale: "defaultThrallScale" },
+                    "shed": { label: "Shed Corpse", img: "shedImg", ring: "shedRing", scale: "shedScale" },
+                    "lancer": { label: "Skeletal Lancer", img: "lancerImg", ring: "lancerRing", scale: "lancerScale" },
+                    "nightmare": { label: "Recurring Nightmare", img: "nightmareImg", ring: "nightmareRing", scale: "nightmareScale" },
+                    "graveyard": { label: "Living Graveyard", img: "graveyardImg", ring: "graveyardRing", scale: "graveyardScale" },
+                    "tendril": { label: "Bloody Tendril", img: "tendrilImg", ring: "tendrilRing", scale: "tendrilScale" },
+                    "conglom": { label: "Conglomerate of Limbs", img: "conglomImg", ring: "conglomRing", scale: "conglomScale" }
+                };
+
+                const getCfg = (type) => ({
+                    img: actor.getFlag("necromancer-thrall-helper", configKeys[type].img) || "",
+                    ring: actor.getFlag("necromancer-thrall-helper", configKeys[type].ring) ?? true,
+                    scale: actor.getFlag("necromancer-thrall-helper", configKeys[type].scale) ?? 1.0
+                });
+
+                let optionsHtml = "";
+                let groupsHtml = "";
+
+                for (const [key, map] of Object.entries(configKeys)) {
+                    optionsHtml += `<option value="${key}">${map.label}</option>`;
+                    const c = getCfg(key);
+                    
+                    groupsHtml += `
+                        <div class="summon-cfg-group" data-target="${key}" style="display: ${key === 'thrall' ? 'block' : 'none'}; margin-top: 10px;">
+                            <div class="form-group" style="display: flex; gap: 5px; margin-bottom: 15px; align-items: center;">
+                                <label style="flex: 1;">Image:</label>
+                                <input type="text" id="${key}-img-path" value="${c.img}" style="flex: 3; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #555;">
+                                <button type="button" class="img-picker-btn" data-target="${key}-img-path" style="flex: 0 0 30px; height: 26px; line-height: 1; padding: 0;"><i class="fas fa-file-import"></i></button>
+                            </div>
+                            <div class="form-group" style="display: flex; justify-content: space-between; margin-bottom: 5px; align-items: center;">
+                                <label>Enable Token Ring:</label>
+                                <input type="checkbox" id="${key}-ring-enabled" ${c.ring ? "checked" : ""}>
+                            </div>
+                            <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;">
+                                <label>Image Scale:</label>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="range" class="scale-slider" id="${key}-img-scale" data-val-target="${key}-scale-val" min="0.5" max="5" step="0.1" value="${c.scale}" style="width: 100px;">
+                                    <span id="${key}-scale-val" style="min-width: 25px; text-align: right;">${c.scale}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
 
                 const formHtml = `
                     <form autocomplete="off" style="margin-bottom: 10px;">
-                        <p>Configure the default thrall appearance and token ring settings.</p>
-                        <div class="form-group" style="display: flex; gap: 5px; margin-bottom: 15px; align-items: center;">
-                            <label style="flex: 1;">Image:</label>
-                            <input type="text" id="thrall-img-path" value="${currentImg}" style="flex: 3; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #555;">
-                            <button type="button" id="thrall-img-picker" style="flex: 0 0 30px; height: 26px; line-height: 1; padding: 0;"><i class="fas fa-file-import"></i></button>
+                        <p>Configure default appearances for your summoned entities.</p>
+                        <div class="form-group">
+                            <label>Entity Setup:</label>
+                            <select id="summon-type-selector">${optionsHtml}</select>
                         </div>
-                        <div class="form-group" style="display: flex; justify-content: space-between; margin-bottom: 5px; align-items: center;">
-                            <label>Enable Token Ring:</label>
-                            <input type="checkbox" id="thrall-ring-enabled" ${useRing ? "checked" : ""}>
-                        </div>
-                        <div class="form-group" style="display: flex; justify-content: space-between; align-items: center;">
-                            <label>Image Scale:</label>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="range" id="thrall-img-scale" min="0.5" max="3" step="0.1" value="${imgScale}" style="width: 100px;">
-                                <span id="thrall-scale-val" style="min-width: 25px; text-align: right;">${imgScale}</span>
-                            </div>
-                        </div>
+                        ${groupsHtml}
                     </form>
                 `;
 
                 new Dialog({
-                    title: "Default Thrall Config",
+                    title: "Default Summon Config",
                     content: formHtml,
                     render: (dialogHtml) => {
-                        // Hook up the FilePicker
-                        dialogHtml.find("#thrall-img-picker").on("click", (evt) => {
+                        // Dropdown toggle logic
+                        dialogHtml.find("#summon-type-selector").on("change", (evt) => {
+                            const selected = evt.target.value;
+                            dialogHtml.find(".summon-cfg-group").hide();
+                            dialogHtml.find(`.summon-cfg-group[data-target="${selected}"]`).show();
+                        });
+
+                        // File picker hook
+                        dialogHtml.find(".img-picker-btn").on("click", (evt) => {
                             evt.preventDefault();
+                            const targetId = $(evt.currentTarget).data("target");
+                            const inputElt = dialogHtml.find(`#${targetId}`);
                             new FilePicker({
                                 type: "image",
-                                current: dialogHtml.find("#thrall-img-path").val(),
-                                callback: (path) => dialogHtml.find("#thrall-img-path").val(path)
+                                current: inputElt.val(),
+                                callback: (path) => inputElt.val(path)
                             }).render(true);
                         });
 
-                        // Make the slider number update in real time
-                        dialogHtml.find("#thrall-img-scale").on("input", (evt) => {
-                            dialogHtml.find("#thrall-scale-val").text(evt.target.value);
+                        // Live slider updates
+                        dialogHtml.find(".scale-slider").on("input", (evt) => {
+                            const targetId = $(evt.currentTarget).data("val-target");
+                            dialogHtml.find(`#${targetId}`).text(evt.target.value);
                         });
                     },
                     buttons: {
                         save: {
                             icon: '<i class="fas fa-save"></i>',
-                            label: "Save Config",
+                            label: "Save All Configs",
                             callback: async (dialogHtml) => {
-                                const newImg = dialogHtml.find("#thrall-img-path").val();
-                                const newRing = dialogHtml.find("#thrall-ring-enabled").is(":checked");
-                                const newScale = parseFloat(dialogHtml.find("#thrall-img-scale").val());
-
-                                await actor.setFlag("necromancer-thrall-helper", "defaultThrallImg", newImg);
-                                await actor.setFlag("necromancer-thrall-helper", "defaultRingEnabled", newRing);
-                                await actor.setFlag("necromancer-thrall-helper", "defaultThrallScale", newScale);
-                                
-                                ui.notifications.info("Default thrall configuration updated.");
+                                let updates = {};
+                                for (const [key, map] of Object.entries(configKeys)) {
+                                    updates[`flags.necromancer-thrall-helper.${map.img}`] = dialogHtml.find(`#${key}-img-path`).val();
+                                    updates[`flags.necromancer-thrall-helper.${map.ring}`] = dialogHtml.find(`#${key}-ring-enabled`).is(":checked");
+                                    updates[`flags.necromancer-thrall-helper.${map.scale}`] = parseFloat(dialogHtml.find(`#${key}-img-scale`).val());
+                                }
+                                await actor.update(updates);
+                                ui.notifications.info("Summon configurations updated successfully.");
                             }
                         },
                         cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
@@ -4579,21 +4692,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 const currentFocus = actor.system?.resources?.focus?.value || 0;
                 if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to cast Skeletal Lancers!");
 
-                // Find Actor from World or Compendiums
-                let lancerActor = game.actors.find(a => a.name === "Skeletal Lancer");
-                if (!lancerActor) {
-                    for (const pack of game.packs.filter(p => p.documentName === "Actor")) {
-                        const entry = pack.index.find(e => e.name === "Skeletal Lancer");
-                        if (entry) {
-                            lancerActor = await pack.getDocument(entry._id);
-                            break;
-                        }
-                    }
-                }
-
-                if (!lancerActor) {
-                    return ui.notifications.error("Could not find the 'Skeletal Lancer' actor in your world or compendiums.");
-                }
+                const lancerActor = await getOrImportActor("Skeletal Lancer");
+                if (!lancerActor) return;
 
                 await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
@@ -4649,11 +4749,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
-                        delta: { 
-                            ownership: { [game.user.id]: 3 }, 
-                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
-                        }
+                        delta: { ownership: { [game.user.id]: 3 } }
                     });
+                    applyCustomVisuals(finalPayload, actor, "lancer");
 
                     currentSpawnIndex++;
                     await executeSpawn(finalPayload).catch(err => console.error(err));
@@ -4730,22 +4828,8 @@ if (nightmareBtn) {
 
             cleanUp();
 
-            // 1. Locate the Recurring Nightmare Actor (World -> Compendiums)
-            let nightmareActor = game.actors.find(a => a.name === "Recurring Nightmare");
-
-            if (!nightmareActor) {
-                for (const pack of game.packs.filter(p => p.documentName === "Actor")) {
-                    const entry = pack.index.find(e => e.name === "Recurring Nightmare");
-                    if (entry) {
-                        nightmareActor = await pack.getDocument(entry._id);
-                        break;
-                    }
-                }
-            }
-
-            if (!nightmareActor) {
-                return ui.notifications.error("Could not find the 'Recurring Nightmare' actor in your world or compendiums.");
-            }
+            const nightmareActor = await getOrImportActor("Recurring Nightmare");
+            if (!nightmareActor) { cleanUp(); return; }
 
             // 2. Generate token document payload
             const tokenDoc = await nightmareActor.getTokenDocument({ x: snapped.x, y: snapped.y });
@@ -4754,11 +4838,9 @@ if (nightmareBtn) {
                 actorLink: false, 
                 ownership: { [game.user.id]: 3 }, 
                 flags: { "necromancer-thrall-helper": { masterId: actor.id } },
-                delta: { 
-                    ownership: { [game.user.id]: 3 }, 
-                    system: { attributes: { hp: { value: totalHP, max: totalHP } } }
-                }
+                delta: { ownership: { [game.user.id]: 3 } }
             });
+            applyCustomVisuals(finalPayload, actor, "nightmare");
 
             const [createdToken] = await executeSpawn(finalPayload);
 
@@ -4864,7 +4946,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
             }
             globalThis.NecroThrallHelper._isSheddingCorpses = true;
 
-            // PRE-FETCH PAYLOAD: This takes the database await completely out of the click cycle
             const basePayload = await prepareThrallPayload(actor, "default");
             if (!basePayload) {
                 globalThis.NecroThrallHelper._isSheddingCorpses = false;
@@ -4887,8 +4968,18 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
             const updateGhost = (evt) => {
                 const pos = evt.data.getLocalPosition(canvas.app.stage);
-                const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                ghost.position.set(snapped.x, snapped.y);
+                let gx = pos.x; let gy = pos.y;
+                if (canvas.grid.getSnappedPoint) {
+                    const snapped = canvas.grid.getSnappedPoint(pos, { mode: CONST.GRID_SNAPPING_MODES.TOP_LEFT_VERTEX });
+                    gx = snapped.x; gy = snapped.y;
+                } else if (canvas.grid.getTopLeftPoint) {
+                    const snapped = canvas.grid.getTopLeftPoint(pos);
+                    gx = snapped.x ?? pos.x; gy = snapped.y ?? pos.y;
+                } else if (canvas.grid.getTopLeft) {
+                    const [sx, sy] = canvas.grid.getTopLeft(pos.x, pos.y);
+                    gx = sx; gy = sy;
+                }
+                ghost.position.set(gx, gy);
             };
             canvas.stage.on("pointermove", updateGhost);
 
@@ -4908,18 +4999,30 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 if (evt.data.button === 2) { cleanUpSpawns(); return; }
 
                 const pos = evt.data.getLocalPosition(canvas.app.stage);
-                const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                let spawnX = pos.x; let spawnY = pos.y;
+                if (canvas.grid.getSnappedPoint) {
+                    const snapped = canvas.grid.getSnappedPoint(pos, { mode: CONST.GRID_SNAPPING_MODES.TOP_LEFT_VERTEX });
+                    spawnX = snapped.x; spawnY = snapped.y;
+                } else if (canvas.grid.getTopLeftPoint) {
+                    const snapped = canvas.grid.getTopLeftPoint(pos);
+                    spawnX = snapped.x ?? pos.x; spawnY = snapped.y ?? pos.y;
+                } else if (canvas.grid.getTopLeft) {
+                    const [sx, sy] = canvas.grid.getTopLeft(pos.x, pos.y);
+                    spawnX = sx; spawnY = sy;
+                }
 
                 const ownerIds = Object.keys(actor.ownership || {}).filter(k => actor.ownership[k] === 3 && k !== "default");
                 const newOwnership = { default: 0 };
                 ownerIds.forEach(id => newOwnership[id] = 3);
                 newOwnership[game.user.id] = 3;
 
-                const finalPayload = foundry.utils.mergeObject(basePayload, {
+                // CRITICAL FIX: Deep Clone the payload to strip database memory!
+                const clonedPayload = foundry.utils.deepClone(basePayload);
+                const finalPayload = foundry.utils.mergeObject(clonedPayload, {
                     actorLink: false,
                     name: "Shed Corpse",
-                    x: snapped.x, 
-                    y: snapped.y,
+                    x: spawnX, 
+                    y: spawnY,
                     width: 1,
                     height: 1,
                     texture: { src: "systems/pf2e/icons/spells/animate-dead.webp", scaleX: 1, scaleY: 1 },
@@ -4927,10 +5030,12 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     flags: { "necromancer-thrall-helper": { masterId: actor.id } }
                 });
 
+                // --- OVERRIDE WITH CUSTOM SHED CORPSE VISUALS ---
+                applyCustomVisuals(finalPayload, actor, "shed");
+
                 currentSpawn++;
                 ui.notifications.info(`Spawn request ${currentSpawn} queued...`);
                 
-                // Fire and forget - NO AWAIT
                 executeSpawn(finalPayload).catch(err => console.error(err));
 
                 if (currentSpawn < maxSpawns) {
@@ -4945,13 +5050,31 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
         globalThis.NecroThrallHelper.executeSheddingMatrix = executeSheddingMatrix;
         
     
+        const activeGraveyard = canvas.scene ? canvas.scene.tokens.find(t => t.flags?.["necromancer-thrall-helper"]?.masterId === this.necroId && t.flags?.["necromancer-thrall-helper"]?.isLivingGraveyard) : null;
         const $graveyardBtn = $(html).find(".living-graveyard-btn, .titan-drop-btn");
+        
         if ($graveyardBtn.length > 0) {
-            $graveyardBtn.off("click").on("click", async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
+            if (activeGraveyard) {
+                // If it exists, swap the button to a Dismiss button
+                $graveyardBtn.replaceWith(`
+                    <button type="button" class="dismiss-graveyard-btn" data-token-id="${activeGraveyard.id}" style="width: 100%; margin-top: 5px; background: #4b5563; color: #f87171; border: 1px solid #dc2626; padding: 6px; font-weight: bold;">
+                        <i class="fas fa-times-circle"></i> Dismiss Living Graveyard
+                    </button>
+                `);
                 
-                console.log("Necromancer Helper | Summon Graveyard button clicked.");
+                $(html).find(".dismiss-graveyard-btn").on("click", async (e) => {
+                    e.preventDefault();
+                    await executeDelete(activeGraveyard.id);
+                    ui.notifications.info("Living Graveyard dismissed.");
+                    this.render(false);
+                });
+            } else {
+                // If it doesn't exist, keep your normal spawn listener
+                $graveyardBtn.off("click").on("click", async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    console.log("Necromancer Helper | Summon Graveyard button clicked.");
 
                 if (this._isPlacingGraveyard) {
                     return ui.notifications.warn("You are already placing a Graveyard! Right-click the canvas to cancel first.");
@@ -4970,21 +5093,8 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
               
                 await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
-                let graveyardActor = game.actors.getName("Living Graveyard");
-                if (!graveyardActor) {
-                    for (const p of game.packs.values()) {
-                        if (p.documentName === "Actor") {
-                            const index = p.indexed ? p.index : await p.getIndex();
-                            const entry = index.find(e => e.name === "Living Graveyard");
-                            if (entry) {
-                                graveyardActor = await p.getDocument(entry._id);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!graveyardActor) { this._isPlacingGraveyard = false; return ui.notifications.error("Could not find the 'Living Graveyard' actor."); }
+                const graveyardActor = await getOrImportActor("Living Graveyard");
+                if (!graveyardActor) { this._isPlacingGraveyard = false; return; }
 
                 ui.notifications.info("Click to place the Living Graveyard. Right-click to cancel.");
                 document.body.style.cursor = "crosshair";
@@ -5036,6 +5146,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     payload.name = "Living Graveyard"; 
                     payload.delta = { ownership: { [game.user.id]: 3 } };
                     payload.flags = { "necromancer-thrall-helper": { masterId: actor.id, isLivingGraveyard: true } };
+                    payload = applyCustomVisuals(payload, actor, "graveyard");
                     
                     const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
                     
@@ -5059,6 +5170,10 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         }]);
 
                         const templateId = templateDoc ? templateDoc.id : null;
+                        // CRITICAL ADDITION: Bind the template to the invisible token so they die together
+                        if (templateId && newTokenDoc) {
+                            await newTokenDoc.update({ "flags.necromancer-thrall-helper.graveyardTemplateId": templateId });
+                        }
 
                         let exactDC = 10 + Math.floor((actor.level || 1) * 1.5);
                         if (actor.spellcasting) {
@@ -5128,7 +5243,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 canvas.stage.once("pointerdown", interactionHandler);
             });
         }
-  
+    }
         const shedBtn = html.querySelector(".graveyard-shed-btn");
         if (shedBtn) {
             shedBtn.addEventListener("click", async (e) => {
@@ -6097,14 +6212,13 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                     let damageType = "bludgeoning";
                     
-                    const hasSpiritFascination = actor.items.some(i => i.slug === "spirit" || i.name === "Spirit");
-                    if (hasSpiritFascination && this.spiritStates && this.spiritStates[tokenId]) {
-                        const savedState = this.spiritStates[tokenId];
-                        if (savedState === "spirit" || savedState === "void") {
-                            damageType = savedState;
-                        }
+                    // --- UNIVERSAL DAMAGE TOGGLE OVERRIDE ---
+                    if (this.spiritStates && this.spiritStates[tokenId]) {
+                        // The UI only shows what they are allowed to click, so we just trust the cache
+                        damageType = this.spiritStates[tokenId];
                     }
                     
+                    // Specific summons inherently override the base type
                     if (isNightmare) damageType = "void";
                     if (isLancer) damageType = "piercing";
 
@@ -9382,9 +9496,8 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 e.preventDefault();
                 const actor = game.actors.get(this.necroId) || game.user.character;
                 if (!actor) return ui.notifications.warn("No Necromancer found!");
-
-                const conglomActor = game.actors.find(a => a.name.includes("Conglomerate of Limbs"));
-                if (!conglomActor) return ui.notifications.error("You must have an actor named 'Conglomerate of Limbs' in your world actors directory.");
+                const conglomActor = await getOrImportActor("Conglomerate of Limbs");
+                if (!conglomActor) return;
 
                 const currentFocus = actor.system?.resources?.focus?.value || 0;
                 if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to conjure the Conglomerate!");
@@ -9479,6 +9592,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             system: { attributes: { hp: { value: totalHP, max: totalHP } } }
                         }
                     });
+                    applyCustomVisuals(finalPayload, actor, "tendril");
 
                     executeSpawn(finalPayload).then(() => {
                         ChatMessage.create({
@@ -9496,13 +9610,16 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
         if (conjureBtn) {
             conjureBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
-                const count = parseInt(e.currentTarget.dataset.count, 10);
                 const actor = game.actors.get(this.necroId) || game.user.character;
                 
                 if (!actor) return ui.notifications.warn("No Necromancer found!");
 
-                const tendrilActor = game.actors.find(a => a.name === "Bloody Tendril");
-                if (!tendrilActor) return ui.notifications.error("You must have an actor named 'Bloody Tendril' in your actors directory.");
+                // Dynamically calculate the count directly in JS so it never fails
+                const sRank = Math.max(1, Math.ceil(actor.level / 2));
+                const count = 3 + Math.floor(Math.max(0, sRank - 3) / 3);
+
+                const tendrilActor = await getOrImportActor("Bloody Tendril");
+                if (!tendrilActor) return;
                 
                 const currentFocus = actor.system?.resources?.focus?.value || 0;
                 if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to conjure tendrils!");
@@ -9618,11 +9735,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
-                        delta: { 
-                            ownership: { [game.user.id]: 3 }, 
-                            system: { attributes: { hp: { value: totalHP, max: totalHP } } }
-                        }
+                        delta: { ownership: { [game.user.id]: 3 } }
                     });
+                    applyCustomVisuals(finalPayload, actor, "conglom");
 
                     currentSpawnIndex++;
                     executeSpawn(finalPayload).catch(err => console.error(err));
