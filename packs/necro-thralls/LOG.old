@@ -1,7 +1,3 @@
-2026/09/03-22:03:30.195 bf64 Recovering log #73
-2026/09/03-22:03:30.198 bf64 Delete type=0 #73
-2026/09/03-22:03:30.198 bf64 Delete type=3 #71
-2026/09/03-22:03:39.017 168b8 Level-0 table #78: started
-2026/09/03-22:03:39.017 168b8 Level-0 table #78: 0 bytes OK
-2026/09/03-22:03:39.017 168b8 Delete type=0 #76
-2026/09/03-22:03:39.019 168b8 Manual compaction at level-0 from '!actors!CN6TMEeEd0Wmvkct' @ 72057594037927935 : 1 .. '!actors.items!uu7VA9eIwi1tUZVs.xPUiZUeZq9q2Bjkw' @ 0 : 0; will stop at (end)
+2026/09/04-07:44:45.233 18dd8 Recovering log #77
+2026/09/04-07:44:45.236 18dd8 Delete type=0 #77
+2026/09/04-07:44:45.237 18dd8 Delete type=3 #75

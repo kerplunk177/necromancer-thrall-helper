@@ -1,7 +1,23 @@
 import { prepareThrallPayload, getThrallPresets } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
 import { executeSpawn, executeDelete, executeHazard, executeDamage } from "../system/socket.js";
+Hooks.once("ready", async () => {
+    if (!game.user.isGM) return;
+    const requiredActors = ["Thrall", "Perfected Thrall", "Skeletal Lancer", "Recurring Nightmare", "Living Graveyard", "Bloody Tendril", "Conglomerate of Limbs"];
+    const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
+    if (!pack) return;
 
+    const index = await pack.getIndex();
+    let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
+
+    for (const name of requiredActors) {
+        if (!game.actors.find(a => a.name === name)) {
+            if (!folder) folder = await Folder.create({ name: "Necromancer Thralls", type: "Actor", color: "#4b5563" });
+            const entry = index.find(a => a.name === name);
+            if (entry) await game.actors.importFromCompendium(pack, entry._id, { folder: folder.id });
+        }
+    }
+});
 
 
 export function getFascinations(actor) {
@@ -323,7 +339,7 @@ if (hasFleshFascination) {
             const effectData = {
                 name: "Reinforced Skeleton: Speed Surge",
                 type: "effect",
-                img: "icons/skills/movement/feet-winged-boots-glowing-yellow.webp",
+                img: "icons/skills/movement/feet-winged-boots-collared-blue.webp",
                 system: {
                     slug: effectSlug,
                     description: { 
@@ -731,13 +747,11 @@ Hooks.once("ready", () => {
     
     const originalApplyDamage = CONFIG.Actor.documentClass.prototype.applyDamage;
     CONFIG.Actor.documentClass.prototype.applyDamage = async function(options) {
-        // Snapshot HP before damage
+
         const preHp = this.system?.attributes?.hp?.value || 0;
         
-        // Let PF2e process the damage normally
         const result = await originalApplyDamage.call(this, options);
         
-        // Check if HP actually dropped
         const postHp = this.system?.attributes?.hp?.value || 0;
         const hpLost = preHp - postHp;
         
@@ -754,7 +768,6 @@ Hooks.once("ready", () => {
 Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
     if (!game.user.isGM) return;
 
-    // Hunt for the bleed trait in the damage payload
     let isBleed = false;
     
     if (options.damage?.instances && Array.isArray(options.damage.instances)) {
@@ -922,7 +935,7 @@ Hooks.on("renderChatMessage", (message, html) => {
             behaviors: [{
                 name: "Gory Difficult Terrain",
                 type: "modifyMovementCost",
-                system: {} // The empty system object works because PF2e will populate the defaults
+                system: {} 
             }],
             flags: {
                 "necromancer-thrall-helper": { isFleshTerrain: true, hazardId: hazardId }
@@ -2315,7 +2328,6 @@ Hooks.on("renderChatMessage", (message, html) => {
         if (necroTokens.length === 0) return ui.notifications.warn("Necromancer token not found on the canvas.");
         const necroToken = necroTokens[0];
 
-        // Snapshot the Wounded condition before PF2e attempts to "recover" the actor
         const preWounded = necroActor.getCondition?.("wounded")?.value || 0;
 
         await necroActor.update({ "system.attributes.hp.value": 1 });
@@ -2421,11 +2433,9 @@ Hooks.on("renderChatMessage", (message, html) => {
         const attackerTokenId = message.speaker?.token;
         const attackerToken = canvas?.tokens?.get(attackerTokenId);
         const attacker = attackerToken?.actor || game.actors.get(message.speaker?.actor);
-
-        if (!attacker) return;
         const targetId = pf2eContext.target?.token || "";
 
-        if (attacker.items.some(i => i.name === "Effect: Bind Heroic Spirit")) {
+        if (attacker && attacker.items.some(i => i.name === "Effect: Bind Heroic Spirit")) {
             if ($html.find('.heroic-spawn-btn').length === 0) {
                 const btnHtml = `
                     <button type="button" class="heroic-spawn-btn" data-target-id="${targetId}" style="background: #4a3600; color: #ffcc00; font-weight: bold; border: 1px solid #ffcc00; margin-top: 5px;">
@@ -2569,33 +2579,39 @@ Hooks.on("renderChatMessage", (message, html) => {
             }
         }
 
-        const isPerfectedAttacker = attackerToken?.document?.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || attackerToken?.name.includes("Perfected");
+        const speakerName = message.speaker?.alias || "";
+        const isPerfectedAttacker = attackerToken?.document?.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || speakerName.includes("Perfected");
+
         if (isPerfectedAttacker) {
             if ($html.find('.perfected-spawn-btn').length === 0) {
+                const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attacker?.getFlag("necromancer-thrall-helper", "masterId") || game.user.character?.id || "";
                 const btnHtml = `
-                    <button type="button" class="perfected-spawn-btn" style="background: #3b0764; color: #d8b4fe; font-weight: bold; border: 1px solid #7e22ce; margin-top: 5px;">
+                    <button type="button" class="perfected-spawn-btn" data-master-id="${masterId}" style="background: #3b0764; color: #d8b4fe; font-weight: bold; border: 1px solid #7e22ce; margin-top: 5px;">
                         <i class="fas fa-ghost"></i> Sprout 4 Thralls
                     </button>
                 `;
                 $html.find('.message-content').append(btnHtml);
-
-                $html.find('.perfected-spawn-btn').off('click').on('click', async (e) => {
-                    e.preventDefault();
-                    if (!game.user.isGM && !attackerToken?.isOwner) return;
-
-                    // CRITICAL TYPO FIX: Changed attackerActor.id to attacker.id
-                    const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attacker.id;
-                    const masterActor = game.actors.get(masterId) || game.user.character;
-
-                    if (globalThis.NecroThrallHelper?.executeSheddingMatrix) {
-                        globalThis.NecroThrallHelper.executeSheddingMatrix(masterActor, 4);
-                    } else {
-                        ui.notifications.warn("Command Deck must be open to process rapid shedding.");
-                    }
-                });
             }
+
+            $html.off('click', '.perfected-spawn-btn').on('click', '.perfected-spawn-btn', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const mId = e.currentTarget.dataset.masterId;
+                const masterActor = game.actors.get(mId) || game.user.character || canvas.tokens.controlled[0]?.actor;
+
+                if (!masterActor) return ui.notifications.warn("Necromancer not found. Please select your character.");
+                if (!game.user.isGM && !masterActor.isOwner) return ui.notifications.warn("You lack permission to command this Necromancer.");
+
+                if (globalThis.NecroThrallHelper?.executeSheddingMatrix) {
+                    globalThis.NecroThrallHelper.executeSheddingMatrix(masterActor, 4);
+                } else {
+                    ui.notifications.warn("Command Deck must be open to process rapid shedding.");
+                }
+            });
         }
     }
+    
 
     const itemName = message.flags?.["aoe-easy-resolve"]?.itemName || message.flavor || "";
     const msgContent = message.content || "";
@@ -2752,7 +2768,6 @@ Hooks.on("renderChatMessage", (message, html) => {
             const targetToken = canvas?.tokens?.get(tokenId);
             if (!targetToken?.actor) return;
 
-            // Rip out the old elements so they rebuild cleanly on toggle
             $row.find('.necro-type-toggle').remove();
             $row.find('.no-save-badge').remove();
 
@@ -2831,7 +2846,6 @@ Hooks.on("renderChatMessage", (message, html) => {
             const targetToken = canvas?.tokens?.get(tokenId);
             if (!targetToken?.actor) return;
 
-            // Rip out the old elements so they rebuild cleanly on toggle
             $row.find('.harm-type-toggle').remove();
             $row.find('.aoe-heal-badge').remove();
 
@@ -3487,7 +3501,6 @@ globalThis.NecroThrallHelper.checkNightmareHaunt = async (nightmareTokenDoc, spe
     const nmW = (nightmareTokenDoc.width || 1) * gridSize;
     const nmH = (nightmareTokenDoc.height || 1) * gridSize;
 
-    // Strict bounding-box overlap math
     const boxesOverlap = (x1, y1, w1, h1, x2, y2, w2, h2) => {
         return !(x1 + w1 <= x2 || x2 + w2 <= x1 || y1 + h1 <= y2 || y2 + h2 <= y1);
     };
@@ -3807,7 +3820,7 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
             const isUnaffected = (newType === 'vitality' && !negHeal) || (newType === 'void' && negHeal);
             
             if (targets[tokenId]) {
-                // Forcefully overwrite both to guarantee the UI syncs
+                
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isUnaffected;
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = false; 
             }
@@ -3826,7 +3839,6 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
             if (newState === "heal") isHealing = true;
             
             if (targets[tokenId]) {
-                // Forcefully overwrite both to guarantee the UI syncs
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = isHealing;
                 if (isHealing) {
                     msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = false;
@@ -3838,7 +3850,7 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
     if (!foundry.utils.isEmpty(msgUpdates)) {
         await message.update(msgUpdates, { necroHelperProcessed: true });
         
-        // Force AoE Easy Resolve to instantly redraw the chat card with the new toggles
+
         if (game.modules.get("aoe-easy-resolve")?.api?.refreshCard) {
             await game.modules.get("aoe-easy-resolve").api.refreshCard(message.id);
         }
@@ -4228,6 +4240,81 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
+        const perfectedBtn = html.querySelector(".conjure-perfected-btn");
+        if (perfectedBtn) {
+            perfectedBtn.addEventListener("click", async (e) => {
+                e.preventDefault();
+                const actor = game.actors.get(this.necroId) || game.user.character;
+                if (!actor) return;
+
+                const currentFocus = actor.system?.resources?.focus?.value || 0;
+                if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to conjure a Perfected Thrall!");
+
+                const perfActor = await getOrImportActor("Perfected Thrall");
+                if (!perfActor) return;
+
+                await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+
+                ui.notifications.info("Click the canvas to place the Perfected Thrall. Right-click to cancel.");
+                document.body.style.cursor = "crosshair";
+                canvas.app.view.style.cursor = "crosshair";
+
+                const gridSize = canvas.grid.size;
+                const ghost = new PIXI.Graphics();
+                ghost.beginFill(0x9333ea, 0.35);
+                ghost.lineStyle(2, 0x7e22ce, 0.9);
+                ghost.drawRect(0, 0, gridSize, gridSize);
+                ghost.endFill();
+                ghost.zIndex = 1000;
+                ghost.position.set(-1000, -1000);
+                canvas.tokens.addChild(ghost);
+
+                const updateGhost = (evt) => {
+                    const pos = evt.data.getLocalPosition(canvas.app.stage);
+                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                    ghost.position.set(snapped.x, snapped.y);
+                };
+
+                canvas.stage.on("pointermove", updateGhost);
+
+                const cleanUp = () => {
+                    document.body.style.cursor = "";
+                    canvas.app.view.style.cursor = "";
+                    canvas.stage.off("pointermove", updateGhost);
+                    ghost.destroy();
+                };
+
+                const interactionHandler = async (evt) => {
+                    if (evt.data.button !== 0 && evt.data.button !== 2) {
+                        canvas.stage.once("pointerdown", interactionHandler);
+                        return;
+                    }
+                    if (evt.data.button === 2) {
+                        cleanUp();
+                        return;
+                    }
+
+                    const pos = evt.data.getLocalPosition(canvas.app.stage);
+                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                    cleanUp();
+
+                    const tokenDoc = await perfActor.getTokenDocument({ x: snapped.x, y: snapped.y });
+                    const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
+                        actorLink: false, 
+                        ownership: { [game.user.id]: 3 }, 
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id, isPerfectedThrall: true } },
+                        delta: { ownership: { [game.user.id]: 3 } }
+                    });
+
+                    await executeSpawn(finalPayload).catch(err => console.error(err));
+                };
+
+                canvas.stage.once("pointerdown", interactionHandler);
+            });
+        }
+
+
+
             // --- CUSTOM VISUALS HELPER ---
         const applyCustomVisuals = (payload, actor, typePrefix) => {
             const img = actor.getFlag("necromancer-thrall-helper", `${typePrefix}Img`);
@@ -4257,7 +4344,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             return payload;
         };
 
-        // --- AUTO-IMPORT HELPER ---
+       
         const getOrImportActor = async (actorName) => {
             let actor = game.actors.find(a => a.name === actorName);
             if (actor) return actor;
@@ -4275,14 +4362,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 return null;
             }
 
-            let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
-            if (!folder) {
-                folder = await Folder.create({ name: "Necromancer Thralls", type: "Actor", color: "#4b5563" });
-            }
-
-            actor = await game.actors.importFromCompendium(pack, entry._id, { folder: folder.id });
-            console.log(`Necromancer Helper | ${actorName} automatically imported into world actors.`);
-            return actor;
+            return await pack.getDocument(entry._id);
         };
 
 
@@ -4291,12 +4371,10 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             // Initialize state tracker if it doesn't exist so it survives re-renders
             this.spiritStates = this.spiritStates || {};
 
-            // Show/Hide Damage Toggle based on dropdown selection
             const spiritDropdowns = html.querySelectorAll('.action-dropdown');
             spiritDropdowns.forEach(dropdown => {
                 const thrallRow = dropdown.closest('.thrall-row');
                 const thrallId = thrallRow.getAttribute('data-token-id');
-                // We kept the 'spirit-toggle-group' class name so we didn't have to rewrite your CSS
                 const toggleGroup = thrallRow.querySelector('.spirit-toggle-group');
                 
                 const updateToggle = () => {
@@ -4312,7 +4390,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 dropdown.addEventListener('change', updateToggle);
                 updateToggle(); 
 
-                // Reapply saved state for this specific thrall, or default to bludgeoning
                 if (toggleGroup) {
                     const savedType = this.spiritStates[thrallId] || 'bludgeoning';
                     const targetBtn = toggleGroup.querySelector(`[data-type="${savedType}"]`);
@@ -4333,8 +4410,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     }
                 }
             });
-
-            // Handle the 5-way damage toggle clicks
+            
             const spiritBtns = html.querySelectorAll('.spirit-dmg-btn');
             spiritBtns.forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -4343,17 +4419,17 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     const thrallId = btn.closest('.thrall-row').getAttribute('data-token-id');
                     const type = btn.getAttribute('data-type');
                     
-                    // Save to class state so it remembers between strikes
+                    
                     this.spiritStates[thrallId] = type;
                     
-                    // Reset all siblings
+                    
                     group.querySelectorAll('.spirit-dmg-btn').forEach(b => {
                         b.classList.remove('active');
                         b.style.background = '#222';
                         b.style.color = '#999';
                     });
                     
-                    // Activate clicked button
+                    
                     let activeBg = '#555'; 
                     if (type === 'spirit') activeBg = '#0ea5e9'; 
                     if (type === 'void') activeBg = '#7e22ce'; 
@@ -4571,7 +4647,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 const actor = game.actors.get(this.necroId) || game.user.character;
                 if (!actor) return;
 
-                // Map exactly where these are saved on the actor
+                
                 const configKeys = {
                     "thrall": { label: "Base Thrall", img: "defaultThrallImg", ring: "defaultRingEnabled", scale: "defaultThrallScale" },
                     "shed": { label: "Shed Corpse", img: "shedImg", ring: "shedRing", scale: "shedScale" },
@@ -4632,14 +4708,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     title: "Default Summon Config",
                     content: formHtml,
                     render: (dialogHtml) => {
-                        // Dropdown toggle logic
                         dialogHtml.find("#summon-type-selector").on("change", (evt) => {
                             const selected = evt.target.value;
                             dialogHtml.find(".summon-cfg-group").hide();
                             dialogHtml.find(`.summon-cfg-group[data-target="${selected}"]`).show();
                         });
 
-                        // File picker hook
                         dialogHtml.find(".img-picker-btn").on("click", (evt) => {
                             evt.preventDefault();
                             const targetId = $(evt.currentTarget).data("target");
@@ -4651,7 +4725,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             }).render(true);
                         });
 
-                        // Live slider updates
                         dialogHtml.find(".scale-slider").on("input", (evt) => {
                             const targetId = $(evt.currentTarget).data("val-target");
                             dialogHtml.find(`#${targetId}`).text(evt.target.value);
@@ -5016,7 +5089,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 ownerIds.forEach(id => newOwnership[id] = 3);
                 newOwnership[game.user.id] = 3;
 
-                // CRITICAL FIX: Deep Clone the payload to strip database memory!
                 const clonedPayload = foundry.utils.deepClone(basePayload);
                 const finalPayload = foundry.utils.mergeObject(clonedPayload, {
                     actorLink: false,
@@ -5055,7 +5127,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
         
         if ($graveyardBtn.length > 0) {
             if (activeGraveyard) {
-                // If it exists, swap the button to a Dismiss button
+                
                 $graveyardBtn.replaceWith(`
                     <button type="button" class="dismiss-graveyard-btn" data-token-id="${activeGraveyard.id}" style="width: 100%; margin-top: 5px; background: #4b5563; color: #f87171; border: 1px solid #dc2626; padding: 6px; font-weight: bold;">
                         <i class="fas fa-times-circle"></i> Dismiss Living Graveyard
@@ -5069,7 +5141,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     this.render(false);
                 });
             } else {
-                // If it doesn't exist, keep your normal spawn listener
                 $graveyardBtn.off("click").on("click", async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -5170,7 +5241,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         }]);
 
                         const templateId = templateDoc ? templateDoc.id : null;
-                        // CRITICAL ADDITION: Bind the template to the invisible token so they die together
+                        
                         if (templateId && newTokenDoc) {
                             await newTokenDoc.update({ "flags.necromancer-thrall-helper.graveyardTemplateId": templateId });
                         }
@@ -6022,7 +6093,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 const maxHP = actor.system.attributes.hp.max;
                                 const actualHealed = Math.min(maxHP - currentHP, hpGained);
                                 
-                                // Pre-package the database update to run everything at once
+                                
                                 const dbUpdates = { "system.attributes.hp.value": currentHP + actualHealed };
                                 
                                 const hasPowerHungry = actor.items.some(i => i.name === "Power Hungry" || (i.system?.slug && i.system.slug.includes("power-hungry")));
@@ -6214,11 +6285,9 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     
                     // --- UNIVERSAL DAMAGE TOGGLE OVERRIDE ---
                     if (this.spiritStates && this.spiritStates[tokenId]) {
-                        // The UI only shows what they are allowed to click, so we just trust the cache
                         damageType = this.spiritStates[tokenId];
                     }
                     
-                    // Specific summons inherently override the base type
                     if (isNightmare) damageType = "void";
                     if (isLancer) damageType = "piercing";
 
@@ -6296,20 +6365,17 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         const actionsList = tokenDoc.actor?.system?.actions;
                         strike = actionsList?.find(a => a.item?.name?.includes("Thrall Strike") || a.slug?.includes("thrall-strike"));
                         
-                        // If PF2e has finished processing the weapon into an action, break the loop
                         if (strike && strike.variants && strike.variants[variantIndex]) {
                             break; 
                         }
-                        await new Promise(resolve => setTimeout(resolve, 100)); // Check again in 100ms
+                        await new Promise(resolve => setTimeout(resolve, 100)); 
                     }
 
-                    // 4. Final safety check in case they have a 2000+ ping
                     if (!strike || !strike.variants || !strike.variants[variantIndex]) {
                         ui.notifications.warn(`Execution failed. ${tokenDoc.name} could not draw its weapon (Network Timeout).`);
                         return;
                     }
 
-                    // 5. Execute the roll
                     await strike.variants[variantIndex].roll({ event: eventObj });
 
                     if (this.currentMap === undefined || this.currentMap === 0) {
@@ -6557,7 +6623,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                     
                                                     await newActor.createEmbeddedDocuments("Item", [effectData]);
 
-                                                   // Dynamic Polling: Wait for PF2e to set Max HP to 100
                                                    for (let i = 0; i < 20; i++) {
                                                     if (newActor.system.attributes.hp.max === 100) {
                                                         await newActor.update({
@@ -7353,7 +7418,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 if (strike && strike.variants && strike.variants[variantIndex]) {
                                     break; 
                                 }
-                                await new Promise(resolve => setTimeout(resolve, 100)); // Check again in 100ms
+                                await new Promise(resolve => setTimeout(resolve, 100)); 
                             }
 
                             if (!strike || !strike.variants || !strike.variants[variantIndex]) {
@@ -7371,13 +7436,13 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 };
                             });
 
-                            // 4. Intercept the rolls sequentially to accurately tally hits
+                            
                             let hitCount = 0;
                             for (const target of validTargets) {
                                 target.setTarget(true, { releaseOthers: true });
                                 
                                 let capturedMsg = null;
-                                // Deploy the trap! Catch the message as PF2e creates it
+                                
                                 const hookId = Hooks.on("createChatMessage", (msg) => {
                                     if (msg.speaker?.token === tokenDoc.id && msg.flags?.pf2e?.context?.type === "attack-roll") {
                                         capturedMsg = msg;
@@ -7386,7 +7451,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 
                                 await strike.variants[variantIndex].roll({ event: e });
                                 
-                                // Wait up to 2.5 seconds for PF2e to process the roll and slap the 'outcome' on it
                                 let outcome = null;
                                 for (let i = 0; i < 25; i++) {
                                     if (capturedMsg) {
@@ -7396,10 +7460,8 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     await new Promise(r => setTimeout(r, 100));
                                 }
                                 
-                                // Turn off the trap for the next loop
                                 Hooks.off("createChatMessage", hookId);
                                 
-                                // If it didn't hit, mark them immune
                                 if (outcome === "success" || outcome === "criticalSuccess") {
                                     hitCount++;
                                 } else {
@@ -7407,7 +7469,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 }
                             }
 
-                            // Restore original targets so the GM's UI goes back to normal
                             if (originalTargets.length > 0) {
                                 originalTargets[0].setTarget(true, { releaseOthers: true });
                                 for (let i = 1; i < originalTargets.length; i++) {
@@ -7417,7 +7478,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 game.user.clearTargets();
                             }
 
-                            // 5. Force the MAP to maximum for the rest of the turn
                             this.currentMap = -10;
                             this.render(false);
 
@@ -7438,7 +7498,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                 return;
                             }
 
-                            // 6. Generate the AoE Easy Resolve Card for the Grab
                             let exactDC = 10 + Math.floor(necroLevel * 1.5);
                             if (actor.spellcasting) {
                                 const entries = typeof actor.spellcasting.contents === "function" ? actor.spellcasting.contents() : Array.from(actor.spellcasting);
@@ -7451,7 +7510,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             }
                             if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) exactDC = actor.system.attributes.classDC.dc.value;
 
-                            // Only name the creatures in flavor text that ACTUALLY got hit
                             const targetNames = validTargets.filter(t => !targetsData[t.document.id].isImmune).map(t => t.name).join(" and ");
 
                             let cgSpell = actor.items.find(i => i.type === "spell" && i.name === "Conglomerate Grab");
@@ -7536,7 +7594,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                         const necroLevel = actor.level || 1;
 
-                        // Build the PF2e Effect to handle the math automatically
                         const effectData = {
                             name: "Effect: Body Shield",
                             type: "effect",
@@ -7732,7 +7789,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             `
                                         });
 
-                                        // Flip the safety off 2 seconds later
                                         setTimeout(async () => {
                                             if (canvas.scene.regions.has(createdRegion.id)) {
                                                 await createdRegion.setFlag("necromancer-thrall-helper", "isArmed", true);
@@ -7984,7 +8040,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const tokenRadiusFeet = ((tokenDoc.width || 1) * gridDist) / 2;
                                         const totalEmanationFeet = 5 + tokenRadiusFeet;
                                         
-                                        // 1. Manually scoop up the targets, strictly excluding the screamer
                                         const targetsData = {};
                                         const validTargets = canvas.tokens.placeables.filter(t => {
                                             if (t.id === tokenDoc.id) return false; 
@@ -8000,7 +8055,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                 const dy = Math.abs(tokenCenter.y - targetCenter.y);
                                                 dist = (Math.max(dx, dy) / canvas.grid.size) * gridDist;
                                             }
-                                            return dist <= 5; // 5-foot emanation threshold
+                                            return dist <= 5; 
                                         });
 
                                         validTargets.forEach(t => {
@@ -8021,7 +8076,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             canvas.interface.createScrollingText(tokenDoc.object.center, `DEATHLY SCREAM!`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x00ffff, direction: CONST.TEXT_ANCHOR_POINTS.UP, fontSize: 32 });
                                         }
 
-                                        // 2. Drop the visual template and set a 20-second self-destruct
                                         const [template] = await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
                                             t: "circle",
                                             user: game.user.id,
@@ -8040,7 +8094,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             return; 
                                         }
 
-                                        // 3. Force aoe-easy-resolve to generate its premium chat card
                                         const templatePath = "modules/aoe-easy-resolve/templates/chat-card.hbs";
                                         const htmlContent = await renderTemplate(templatePath, {
                                             targets: Object.values(targetsData),
@@ -8653,7 +8706,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                             traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "void"] },
                             tradition: { value: "divine" },
                         area: { type: "emanation", value: 10 },
-                        target: { value: "creatures" }, // <--- CRITICAL: Tells the system it targets creatures
+                        target: { value: "creatures" }, 
                         defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
                         damage: { "0": { formula: `${bombRank}d12`, type: "void" } }
                     };
@@ -8690,7 +8743,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
                                         const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
                                         
-                                        // 1. Set the Cache for the Bomb
                                         window.aoeEasyResolveCache = {
                                             item: bombSpell,
                                             name: "Necrotic Bomb",
@@ -8705,7 +8757,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         const tokenRadiusFeet = (tokenWidth * gridDist) / 2;
                                         const totalEmanationFeet = 10 + tokenRadiusFeet;
     
-                                        // 2. Drop the template FIRST so it grabs the Bomb cache
                                         await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
                                             t: "circle", 
                                             user: game.user.id, 
@@ -9213,7 +9264,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                                         const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
                                         if (DamageRoll) {
-                                            // Explicitly tag it so the chat card generates the HEAL button UI
                                             const roll = await new DamageRoll(`${spellRank}d8[healing]`).evaluate();
                                             const actualHeal = roll.total;
                                             
@@ -9222,7 +9272,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                 flavor: `<strong>Song of the Soul</strong> <span class="tag" style="background: #222; color: #fff; padding: 2px 4px; font-size: 10px; border-radius: 2px;">${spellTrait}</span><br><b>${actor.name}</b> shapes ${tokenDoc.name} into an instrument, restoring <b>${actualHeal} HP</b> to ${targetDoc.name}!`
                                             });
 
-                                            // Directly inject the HP to completely bypass the stubborn damage API
                                             const currentHP = targetActor.system.attributes.hp.value;
                                             const maxHP = targetActor.system.attributes.hp.max;
                                             await targetActor.update({ "system.attributes.hp.value": Math.min(maxHP, currentHP + actualHeal) });
@@ -9308,7 +9357,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     <option value="random">(Random Family Member)</option>
                 `;
                 
-                // Pass 1: Grey out unique thralls that are already on the battlefield
+                
                 presets.forEach(p => {
                     const isAlreadyActive = canvas?.scene?.tokens?.some(t => 
                         t.getFlag("necromancer-thrall-helper", "masterId") === actor.id && 
@@ -9375,8 +9424,8 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     const rangeInPixels = (30 / canvas.scene.grid.distance) * canvas.grid.size;
                                     
                                     rangeIndicator = new PIXI.Graphics();
-                                    rangeIndicator.beginFill(0x22c55e, 0.08); // Very soft green tint
-                                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5); // Solid green border
+                                    rangeIndicator.beginFill(0x22c55e, 0.08); 
+                                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5); 
                                     rangeIndicator.drawCircle(masterToken.center.x, masterToken.center.y, rangeInPixels);
                                     rangeIndicator.endFill();
                                     rangeIndicator.zIndex = 998; 
@@ -9504,7 +9553,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                 await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
-                // Scale HP based on spell rank (Base 40, +10 per rank above 4)
                 const spellRank = Math.max(4, Math.ceil(actor.level / 2));
                 const bonusHP = Math.max(0, spellRank - 4) * 10;
                 const totalHP = 40 + bonusHP;
@@ -9517,7 +9565,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 const ghost = new PIXI.Graphics();
                 ghost.beginFill(0x550000, 0.4);
                 ghost.lineStyle(2, 0xff0000, 0.8);
-                ghost.drawRect(0, 0, gridSize * 3, gridSize * 3); // Huge size is 3x3
+                ghost.drawRect(0, 0, gridSize * 3, gridSize * 3); 
                 ghost.endFill();
                 ghost.zIndex = 1000;
                 ghost.position.set(-1000, -1000);
@@ -9564,7 +9612,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         spawnY = snapped.y;
                     }
 
-                    // Enforce 30-foot range
                     const necroTokens = actor.getActiveTokens();
                     if (necroTokens.length > 0) {
                         const necroCenter = necroTokens[0].center;
@@ -9614,7 +9661,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 
                 if (!actor) return ui.notifications.warn("No Necromancer found!");
 
-                // Dynamically calculate the count directly in JS so it never fails
                 const sRank = Math.max(1, Math.ceil(actor.level / 2));
                 const count = 3 + Math.floor(Math.max(0, sRank - 3) / 3);
 
@@ -9734,7 +9780,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
-                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id, tendrilTetherId: tetherId } },
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
                     applyCustomVisuals(finalPayload, actor, "conglom");
