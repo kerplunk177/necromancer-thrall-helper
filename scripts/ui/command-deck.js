@@ -1,6 +1,57 @@
 import { prepareThrallPayload, getThrallPresets } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
 import { executeSpawn, executeDelete, executeHazard, executeDamage } from "../system/socket.js";
+
+
+globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
+globalThis.NecroThrallHelper.purgeGraphics = (sceneId, { regionIds = [], drawingIds = [], templateIds = [] }) => {
+    if (game.user.isGM) {
+        const scene = game.scenes.get(sceneId);
+        if (!scene) return;
+        if (regionIds.length) scene.deleteEmbeddedDocuments("Region", regionIds.filter(id => scene.regions.has(id))).catch(()=>{});
+        if (drawingIds.length) scene.deleteEmbeddedDocuments("Drawing", drawingIds.filter(id => scene.drawings.has(id))).catch(()=>{});
+        if (templateIds.length) scene.deleteEmbeddedDocuments("MeasuredTemplate", templateIds.filter(id => scene.templates.has(id))).catch(()=>{});
+    } else {
+        game.socket.emit("module.necromancer-thrall-helper", { action: "purgeMapGraphics", sceneId, regionIds, drawingIds, templateIds });
+    }
+};
+
+Hooks.once("ready", () => {
+    game.socket.on("module.necromancer-thrall-helper", async (data) => {
+        if (!game.user.isGM) return; 
+
+        if (data.action === "deleteBloodPool") {
+            const scene = game.scenes.get(data.sceneId);
+            if (!scene) return;
+            const region = scene.regions.get(data.regionId);
+            if (region) await region.delete();
+            const drawing = scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === data.poolId);
+            if (drawing) await drawing.delete();
+        }
+
+        if (data.action === "lockDeathReaction") {
+            const msg = game.messages.get(data.messageId);
+            if (msg) {
+                await msg.setFlag("necromancer-thrall-helper", "reactionUsed", data.label);
+            }
+        }
+
+        if (data.action === "purgeMapGraphics") {
+            const scene = game.scenes.get(data.sceneId);
+            if (!scene) return;
+            if (data.regionIds?.length) await scene.deleteEmbeddedDocuments("Region", data.regionIds.filter(id => scene.regions.has(id))).catch(()=>{});
+            if (data.drawingIds?.length) await scene.deleteEmbeddedDocuments("Drawing", data.drawingIds.filter(id => scene.drawings.has(id))).catch(()=>{});
+            if (data.templateIds?.length) await scene.deleteEmbeddedDocuments("MeasuredTemplate", data.templateIds.filter(id => scene.templates.has(id))).catch(()=>{});
+        }
+
+        if (data.action === "addCondition") {
+            const targetActor = await fromUuid(data.actorUuid);
+            if (targetActor) await targetActor.createEmbeddedDocuments("Item", [data.itemData]).catch(()=>{});
+        }
+    });
+});
+
+
 Hooks.once("ready", async () => {
     if (!game.user.isGM) return;
     const requiredActors = ["Thrall", "Perfected Thrall", "Skeletal Lancer", "Recurring Nightmare", "Living Graveyard", "Bloody Tendril", "Conglomerate of Limbs"];
@@ -222,8 +273,12 @@ Hooks.on("deleteItem", async (itemDoc, options, userId) => {
     const targetScene = game.scenes.get(sceneId);
     if (!targetScene) return;
 
-    const region = targetScene.regions.find(r => r.getFlag("necromancer-thrall-helper", "hazardId") === hazardId);
-    if (region) await region.delete();
+    const rIds = targetScene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "hazardId") === hazardId || r.getFlag("necromancer-thrall-helper", "goreRegionId") === hazardId).map(r => r.id);
+    const dIds = targetScene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "hazardId") === hazardId || d.getFlag("necromancer-thrall-helper", "goreRegionId") === hazardId).map(d => d.id);
+    
+    if (rIds.length > 0 || dIds.length > 0) {
+        globalThis.NecroThrallHelper.purgeGraphics(sceneId, { regionIds: rIds, drawingIds: dIds });
+    }
 });
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     if (!game.user.isGM) return;
@@ -339,7 +394,7 @@ if (hasFleshFascination) {
             const effectData = {
                 name: "Reinforced Skeleton: Speed Surge",
                 type: "effect",
-                img: "icons/skills/movement/feet-winged-boots-collared-blue.webp",
+                img: "icons/equipment/feet/boots-collared-simple-brown.webp",
                 system: {
                     slug: effectSlug,
                     description: { 
@@ -813,8 +868,8 @@ Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
                     <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #b91c1c;">
                         <p style="margin: 0 0 5px 0;"><b>${targetToken.name}</b> takes bleed damage within 30 feet of <b>${necroToken.name}</b>.</p>
                         <p style="margin: 0 0 8px 0; font-size: 0.95em;">Pool their spilled lifeblood to grant <b>${necroLevel} HP</b> to an ally?</p>
-                        <div style="text-align: center;">
-                            <button type="button" class="blood-pool-spawn-btn" data-necro-id="${necroToken.actor.id}" data-target-id="${targetToken.id}" style="background: #3a0000; color: #f87171; border: 1px solid #b91c1c; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
+                        <div class="death-reaction-actions" style="text-align: center;">
+                            <button type="button" class="blood-pool-spawn-btn" data-is-bleed="true" data-necro-id="${necroToken.actor.id}" data-target-id="${targetToken.id}" style="background: #3a0000; color: #f87171; border: 1px solid #b91c1c; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
                                 <i class="fas fa-tint"></i> Create Blood Pool
                             </button>
                         </div>
@@ -826,7 +881,43 @@ Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
 });
 Hooks.on("renderChatMessage", (message, html) => {
     const $html = html instanceof jQuery ? html : $(html);
+    const reactionUsed = message.getFlag("necromancer-thrall-helper", "reactionUsed");
+    if (reactionUsed) {
+        const labelColor = reactionUsed === "Inevitable Return" ? "#c084fc" : "#f87171";
+        $html.find('.death-reaction-actions').html(`
+            <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
+                <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
+                    <i class="fas fa-ban"></i> Death Reaction
+                </span>
+                <span style="display: block; color: ${labelColor}; font-size: 0.85em; font-style: italic; margin-top: 2px;">
+                    Expended: ${reactionUsed}
+                </span>
+            </div>
+        `);
+    }
 
+    $html.find('.death-reaction-actions').each(function() {
+        const $container = $(this);
+        const $btn = $container.find('.blood-pool-spawn-btn, .inevitable-return-btn').first();
+        if ($btn.length > 0 && !reactionUsed) {
+            const isBleed = $btn.attr("data-is-bleed") === "true";
+            const necroId = $btn.attr("data-necro-id");
+            const targetId = $btn.attr("data-target-id");
+            const necroActor = game.actors.get(necroId);
+            if (!isBleed && necroActor && necroActor.getFlag("necromancer-thrall-helper", `harvested_${targetId}`)) {
+                $container.html(`
+                    <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
+                        <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
+                            <i class="fas fa-ban"></i> Death Reaction
+                        </span>
+                        <span style="display: block; color: #999; font-size: 0.85em; font-style: italic; margin-top: 2px;">
+                            Corpse Already Harvested
+                        </span>
+                    </div>
+                `);
+            }
+        }
+    });
 
     $html.find('.inevitable-return-btn').off('click').on('click', async (e) => {
         e.preventDefault();
@@ -838,8 +929,10 @@ Hooks.on("renderChatMessage", (message, html) => {
         const attacker = game.actors.get(necroActorId);
         const targetToken = canvas.tokens.get(targetId);
 
-        if (!attacker || !targetToken) {
-            return ui.notifications.warn("Could not locate the Necromancer or the corpse.");
+        if (!attacker || !targetToken) return ui.notifications.warn("Could not locate the Necromancer or the corpse.");
+
+        if (attacker.getFlag("necromancer-thrall-helper", `harvested_${targetId}`) || message.getFlag("necromancer-thrall-helper", "reactionUsed")) {
+            return ui.notifications.warn("This corpse has already been harvested.");
         }
 
         const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
@@ -875,6 +968,23 @@ Hooks.on("renderChatMessage", (message, html) => {
                     icon: '<i class="fas fa-ghost"></i>',
                     label: "Rise",
                     callback: async (dialogHtml) => {
+                        await attacker.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
+                        if (game.user.isGM) {
+                            await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Inevitable Return");
+                        } else {
+                            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Inevitable Return" });
+                            $btn.closest('.death-reaction-actions').html(`
+                                <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
+                                    <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
+                                        <i class="fas fa-ban"></i> Death Reaction
+                                    </span>
+                                    <span style="display: block; color: #c084fc; font-size: 0.85em; font-style: italic; margin-top: 2px;">
+                                        Expended: Inevitable Return
+                                    </span>
+                                </div>
+                            `);
+                        }
+
                         const dialogForm = dialogHtml[0];
                         const presetId = dialogForm.querySelector("#inevitable-preset").value;
 
@@ -882,12 +992,8 @@ Hooks.on("renderChatMessage", (message, html) => {
                         if (!basePayload) return;
 
                         const finalPayload = foundry.utils.mergeObject(basePayload, {
-                            x: targetToken.x,
-                            y: targetToken.y,
-                            delta: { 
-                                ownership: { [game.user.id]: 3 },
-                                system: { traits: { size: { value: size } } }
-                            }
+                            x: targetToken.x, y: targetToken.y,
+                            delta: { ownership: { [game.user.id]: 3 }, system: { traits: { size: { value: size } } } }
                         });
 
                         executeSpawn(finalPayload).catch(err => {
@@ -895,12 +1001,6 @@ Hooks.on("renderChatMessage", (message, html) => {
                             ui.notifications.error("Failed to materialize the corpse thrall.");
                         });
 
-                     
-                        $btn.closest('.death-reaction-actions').html(`
-                            <p style="margin: 4px 0 0 0; text-align: center; color: #c084fc; font-style: italic; font-size: 0.9em;">
-                                <i class="fas fa-check"></i> Reaction Used: Inevitable Return
-                            </p>
-                        `);
                         ui.notifications.info("The corpse yields its thrall.");
                     }
                 },
@@ -909,6 +1009,7 @@ Hooks.on("renderChatMessage", (message, html) => {
             default: "summon"
         }).render(true);
     });
+
     $html.find(".flesh-terrain-btn").off("click").on("click", async (e) => {
         e.preventDefault();
         const $btn = $(e.currentTarget);
@@ -945,9 +1046,7 @@ Hooks.on("renderChatMessage", (message, html) => {
         const dummyDrawing = {
             author: game.user.id,
             shape: { type: "r", width: tW * gridSize, height: tH * gridSize },
-            x: tX,
-            y: tY,
-            hidden: true, 
+            x: tX, y: tY, hidden: true, 
             flags: { "necromancer-thrall-helper": { hazardId: hazardId } }
         };
 
@@ -961,17 +1060,13 @@ Hooks.on("renderChatMessage", (message, html) => {
         const trackerEffect = {
             name: "Hazard: Gory Remains",
             type: "effect",
-            img: "icons/magic/symbols/runes-star-pentagram-orange.webp",
+            img: "icons/magic/symbols/runes-star-orange.webp",
             system: {
                 description: { value: "Tracks the duration of a Gory Remains difficult terrain hazard. Deleting this will clear the hazard from the map." },
                 duration: { value: 10, unit: "minutes", expiry: "turn-start" }
             },
             flags: {
-                "necromancer-thrall-helper": { 
-                    isHazardTracker: true, 
-                    hazardId: hazardId,
-                    sceneId: canvas.scene.id
-                }
+                "necromancer-thrall-helper": { isHazardTracker: true, hazardId: hazardId, sceneId: canvas.scene.id }
             }
         };
         await masterActor.createEmbeddedDocuments("Item", [trackerEffect]);
@@ -982,15 +1077,44 @@ Hooks.on("renderChatMessage", (message, html) => {
             </p>
         `);
     });
+
     $html.find(".blood-pool-spawn-btn").off("click").on("click", async (e) => {
         e.preventDefault();
         const $btn = $(e.currentTarget);
+        const isBleed = $btn.attr("data-is-bleed") === "true";
         const necroId = $btn.attr("data-necro-id");
         const targetId = $btn.attr("data-target-id");
 
         const necroActor = game.actors.get(necroId);
         const targetToken = canvas.tokens.get(targetId);
         if (!necroActor || !targetToken || !canvas.scene) return;
+
+        if (message.getFlag("necromancer-thrall-helper", "reactionUsed")) {
+            return ui.notifications.warn("This reaction has already been used.");
+        }
+        if (!isBleed && necroActor.getFlag("necromancer-thrall-helper", `harvested_${targetId}`)) {
+            return ui.notifications.warn("This corpse has already been harvested.");
+        }
+
+        if (!isBleed) {
+            await necroActor.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
+        }
+
+        if (game.user.isGM) {
+            await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Blood Pool");
+        } else {
+            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Blood Pool" });
+            $btn.closest('.death-reaction-actions').html(`
+                <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
+                    <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
+                        <i class="fas fa-ban"></i> Death Reaction
+                    </span>
+                    <span style="display: block; color: #f87171; font-size: 0.85em; font-style: italic; margin-top: 2px;">
+                        Expended: Blood Pool
+                    </span>
+                </div>
+            `);
+        }
 
         const gridSize = canvas.scene.grid.size;
         const poolId = foundry.utils.randomID();
@@ -1006,73 +1130,50 @@ Hooks.on("renderChatMessage", (message, html) => {
             name: `Blood Pool (${necroActor.name})`,
             color: "#990000",
             shapes: [{
-                type: "rectangle",
-                hole: false,
-                x: targetToken.x,
-                y: targetToken.y,
-                width: gridSize,
-                height: gridSize,
-                rotation: 0
+                type: "rectangle", hole: false,
+                x: targetToken.x, y: targetToken.y, width: gridSize, height: gridSize, rotation: 0
             }],
             elevation: { bottom: -1000, top: 1000 },
             behaviors: [{
-                name: "Blood Pool Absorption",
-                type: "executeScript",
-                system: {
-                    events: ["tokenEnter", "tokenTurnStart"],
-                    source: behaviorSource
-                }
+                name: "Blood Pool Absorption", type: "executeScript",
+                system: { events: ["tokenEnter", "tokenTurnStart"], source: behaviorSource }
             }],
             flags: {
-                "necromancer-thrall-helper": {
-                    isBloodPool: true,
-                    poolId: poolId,
-                    masterId: necroActor.id,
-                    healValue: necroLevel
-                }
+                "necromancer-thrall-helper": { isBloodPool: true, poolId: poolId, masterId: necroActor.id, healValue: necroLevel }
             }
         };
 
         const drawingData = {
-            author: game.user.id,
-            shape: { type: "e", width: gridSize, height: gridSize },
-            x: targetToken.x,
-            y: targetToken.y,
-            fillType: 1,
-            fillColor: "#880000",
-            fillAlpha: 0.5,
-            strokeWidth: 2,
-            strokeColor: "#ff0000",
-            strokeAlpha: 0.8,
-            text: "🩸 Blood Pool",
-            fontSize: 16,
-            textColor: "#ffffff",
-            flags: {
-                "necromancer-thrall-helper": { poolId: poolId }
-            }
+            author: game.user.id, shape: { type: "e", width: gridSize, height: gridSize },
+            x: targetToken.x, y: targetToken.y, fillType: 1, fillColor: "#880000", fillAlpha: 0.5,
+            strokeWidth: 2, strokeColor: "#ff0000", strokeAlpha: 0.8, text: "🩸 Blood Pool", fontSize: 16, textColor: "#ffffff",
+            flags: { "necromancer-thrall-helper": { poolId: poolId } }
         };
 
         const [createdRegion] = await executeHazard(regionData, drawingData);
         await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
 
-
         setTimeout(async () => {
             if (canvas.scene && canvas.scene.regions.has(createdRegion.id)) {
-                await createdRegion.delete();
-                const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
-                if (drawing) await drawing.delete();
+                if (game.user.isGM) {
+                    await createdRegion.delete();
+                    const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
+                    if (drawing) await drawing.delete();
+                } else {
+                    game.socket.emit("module.necromancer-thrall-helper", { 
+                        action: "deleteBloodPool", 
+                        sceneId: canvas.scene.id, 
+                        regionId: createdRegion.id, 
+                        poolId: poolId 
+                    });
+                }
             }
         }, 60000);
 
-
-        $btn.closest('.death-reaction-actions').html(`
-            <p style="margin: 4px 0 0 0; text-align: center; color: #f87171; font-style: italic; font-size: 0.9em;">
-                <i class="fas fa-check"></i> Reaction Used: Blood Pool
-            </p>
-        `);
         ui.notifications.info("Blood Pool materialized on the battlefield.");
     });
 });
+
 
 Hooks.once("ready", () => {
     const aoeApi = game.modules.get("aoe-easy-resolve")?.api;
@@ -1095,7 +1196,6 @@ Hooks.once("ready", () => {
             payload.itemName = "Thick Skin";
             payload.hazardDamage = null;
             
-        
             const casterAlliance = payload.caster?.system?.details?.alliance 
                                 || payload.originItem?.actor?.system?.details?.alliance 
                                 || "party";
@@ -1128,7 +1228,10 @@ Hooks.once("ready", () => {
         }
         
         if (name.includes("Desperate Revival") || name.includes("Necrotic Bomb") || name.includes("Necrotic Blast") || name.includes("Dread Mosquito")) {
-            const msg = payload.originMessageId ? game.messages.get(payload.originMessageId) : null;
+            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null);
+            if (!msg) msg = game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName);
+            if (!msg) msg = game.messages.get(payload.originMessageId);
+
             for (const [tokenId, targetData] of Object.entries(payload.targets)) {
                 const token = canvas.tokens.get(tokenId);
                 if (!token?.actor) continue;
@@ -1143,7 +1246,10 @@ Hooks.once("ready", () => {
         }
         
         if (name.includes("Harm")) {
-            const msg = payload.originMessageId ? game.messages.get(payload.originMessageId) : null;
+            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null);
+            if (!msg) msg = game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName);
+            if (!msg) msg = game.messages.get(payload.originMessageId);
+
             for (const [tokenId, targetData] of Object.entries(payload.targets)) {
                 const token = canvas.tokens.get(tokenId);
                 if (!token?.actor) continue;
@@ -1300,9 +1406,6 @@ Hooks.once("ready", () => {
         }
 
         if (originName.includes("Blossoming Gore Hazard")) {
-            const bgSpell = payload.originItem;
-            const bleedDmg = bgSpell?.getFlag("necromancer-thrall-helper", "bleedDmg") || 10;
-            
             for (let [tokenId, targetData] of Object.entries(payload.targets)) {
                 if (targetData.hasApplied) continue;
                 const token = canvas.tokens.get(tokenId);
@@ -1311,11 +1414,13 @@ Hooks.once("ready", () => {
                     continue;
                 }
 
-                try {
-                    if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("persistent-damage", { value: String(bleedDmg), suboption: "bleed" });
-                } catch (e) {}
-
                 const dos = targetData.degreeOfSuccess;
+                if (!dos || dos === "criticalSuccess") {
+                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #4ade80; font-weight: bold;">Unaffected!</span>`, saveNote: "Crit Success" });
+                    targetData.hasApplied = true;
+                    continue;
+                }
+
                 let drainedVal = (dos === "success" || dos === "failure") ? 1 : (dos === "criticalFailure") ? 2 : 0;
                 
                 if (drainedVal > 0) {
@@ -1325,11 +1430,10 @@ Hooks.once("ready", () => {
                 }
 
                 let thrallsToSpawn = dos === "failure" ? 1 : dos === "criticalFailure" ? 2 : 0;
-                let receiptContent = `<span style="color: #ff0000; font-weight: bold;">Takes ${bleedDmg} persistent bleed!</span>`;
-                if (drainedVal > 0) receiptContent += `<br><span style="color: #ff8c00;">Drained ${drainedVal}</span>`;
+                let receiptContent = `<span style="color: #ff8c00; font-weight: bold;">Drained ${drainedVal}</span>`;
                 if (thrallsToSpawn > 0) receiptContent += `<br><div style="margin-top: 4px;"><button type="button" class="gore-spawn-btn" data-count="${thrallsToSpawn}" data-target-id="${tokenId}" style="background: #220000; color: #ff6b6b; border: 1px solid #ff0000; padding: 2px; font-size: 0.85em; border-radius: 4px; cursor: pointer;"><i class="fas fa-ghost"></i> Sprout ${thrallsToSpawn} Thrall(s)</button></div>`;
 
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptContent, saveNote: "Blossoming Gore" });
+                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptContent, saveNote: `Blossoming Gore (${dos})` });
                 targetData.hasApplied = true;
             }
         }
@@ -1898,16 +2002,30 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
         }
     }
 });
-Hooks.on("preDeleteToken", (tokenDoc) => {
-    if (game.combat && tokenDoc.inCombat) {
-        const combatants = game.combat.combatants.filter(c => c.tokenId === tokenDoc.id);
-        if (combatants.length > 0) {
-            const ids = combatants.map(c => c.id);
-            game.combat.deleteEmbeddedDocuments("Combatant", ids).catch(err => {
-                console.error("Necromancer Helper | Safe-Delete Interceptor caught a snag:", err);
-            });
-        }
+// --- CAROUSEL COMBAT TRACKER SAFE DELETION INTERCEPTOR ---
+Hooks.on("preDeleteToken", (tokenDoc, options, userId) => {
+    if (!game.combat || !tokenDoc.inCombat) return true;
+    
+    if (!game.user.isGM) return true;
+
+    if (options.necroSafeDeleteFinished) return true;
+
+    const combatants = game.combat.combatants.filter(c => c.tokenId === tokenDoc.id);
+    if (combatants.length > 0) {
+        const ids = combatants.map(c => c.id);
+        
+        game.combat.deleteEmbeddedDocuments("Combatant", ids).then(() => {
+            setTimeout(async () => {
+                await tokenDoc.delete({ necroSafeDeleteFinished: true });
+            }, 100);
+        }).catch(err => {
+            console.error("Necromancer Helper | Safe-Delete Interceptor failed:", err);
+        });
+
+        return false; 
     }
+    
+    return true;
 });
 
 
@@ -1918,17 +2036,21 @@ globalThis.NecroThrallHelper.declinedPools = globalThis.NecroThrallHelper.declin
 globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj) => {
     const actor = tokenObj.actor;
     if (!actor) return;
-
+    
+    // Strict Owner Check
+    if (!actor.isOwner) return;
 
     const alliance = actor.system?.details?.alliance || actor.alliance;
     const isAlly = alliance === "party" || tokenObj.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY;
     if (!isAlly) return;
 
     const poolId = regionDoc.getFlag("necromancer-thrall-helper", "poolId");
-    const healValue = regionDoc.getFlag("necromancer-thrall-helper", "healValue") || 1;
-    const masterId = regionDoc.getFlag("necromancer-thrall-helper", "masterId");
-    const masterActor = game.actors.get(masterId);
+    const absorbedFlag = `absorbed_${poolId}`;
+    
+    // Lockout to prevent double-dipping on the same pool
+    if (actor.getFlag("necromancer-thrall-helper", absorbedFlag)) return;
 
+    const healValue = regionDoc.getFlag("necromancer-thrall-helper", "healValue") || 1;
     const lockoutKey = `${tokenObj.id}_${poolId}`;
     if (globalThis.NecroThrallHelper.declinedPools.has(lockoutKey)) return;
 
@@ -1943,6 +2065,10 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                 icon: '<i class="fas fa-heart"></i>',
                 label: "Absorb (+HP)",
                 callback: async () => {
+                    // Final safety check before executing
+                    if (actor.getFlag("necromancer-thrall-helper", absorbedFlag)) return;
+                    await actor.setFlag("necromancer-thrall-helper", absorbedFlag, true);
+
                     const currentHP = actor.system.attributes.hp.value;
                     const maxHP = actor.system.attributes.hp.max;
                     const actualHealed = Math.min(maxHP - currentHP, healValue);
@@ -1951,9 +2077,7 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
 
                     if (canvas.ready && actualHealed > 0) {
                         canvas.interface.createScrollingText(tokenObj.center, `+${actualHealed} HP`, {
-                            anchor: CONST.TEXT_ANCHOR_POINTS.TOP,
-                            fill: 0xef4444,
-                            direction: CONST.TEXT_ANCHOR_POINTS.UP
+                            anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0xef4444, direction: CONST.TEXT_ANCHOR_POINTS.UP
                         });
                     }
 
@@ -1963,11 +2087,22 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                         content: `<p><b>${tokenObj.name}</b> drinks the infused essence, recovering <b>${actualHealed} Hit Points</b>!</p>`
                     });
 
-                    if (canvas.scene) {
-                        await regionDoc.delete();
+                    // --- PROPER SOCKET EMISSION ---
+                    if (game.user.isGM) {
+                        // If GM clicks it, delete locally
+                        if (canvas.scene.regions.has(regionDoc.id)) await regionDoc.delete();
                         const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
                         if (drawing) await drawing.delete();
+                    } else {
+                        // If Player clicks it, hand the exact IDs to the GM client
+                        game.socket.emit("module.necromancer-thrall-helper", {
+                            action: "deleteBloodPool",
+                            sceneId: canvas.scene.id,
+                            regionId: regionDoc.id,
+                            poolId: poolId
+                        });
                     }
+                    
                     globalThis.NecroThrallHelper.declinedPools.delete(lockoutKey);
                 }
             },
@@ -1976,15 +2111,17 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                 label: "Leave It",
                 callback: () => {
                     globalThis.NecroThrallHelper.declinedPools.add(lockoutKey);
-                    setTimeout(() => {
-                        globalThis.NecroThrallHelper.declinedPools.delete(lockoutKey);
-                    }, 5000);
+                    setTimeout(() => globalThis.NecroThrallHelper.declinedPools.delete(lockoutKey), 5000);
                 }
             }
         },
         default: "absorb"
     }).render(true);
 };
+
+
+
+
 Hooks.on("createChatMessage", async (message) => {
     if (message.author?.id !== game.user.id) return;
     
@@ -3046,7 +3183,6 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
         }
     }
     
-    // 1. Song of the Soul Tracker
     const isInstrument = tokenDoc.actor?.items.some(i => i.name === "Effect: Song Instrument");
     if (isInstrument && canvas.scene) {
         for (const t of canvas.scene.tokens) {
@@ -3065,27 +3201,26 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
         }
     }
 
-    // 2. Tendril & Horde Template Cleanup
+    const sceneId = tokenDoc.parent?.id;
+    if (!sceneId || !canvas.scene) return;
+
     const tetherId = tokenDoc.getFlag("necromancer-thrall-helper", "tendrilTetherId");
-    if (tetherId && canvas.scene) {
-        const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId);
-        for (const r of regions) await r.delete();
-        const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId);
-        for (const d of drawings) await d.delete();
+    if (tetherId) {
+        const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId).map(r => r.id);
+        const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId).map(d => d.id);
+        globalThis.NecroThrallHelper.purgeGraphics(sceneId, { regionIds: regions, drawingIds: drawings });
     }
 
     const isAnchor = tokenDoc.getFlag("necromancer-thrall-helper", "isHordeAnchor");
-    if (isAnchor && canvas.scene) {
-        const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
-        for (const r of regions) await r.delete();
-        const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
-        for (const d of drawings) await d.delete();
+    if (isAnchor) {
+        const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id).map(r => r.id);
+        const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id).map(d => d.id);
+        globalThis.NecroThrallHelper.purgeGraphics(sceneId, { regionIds: regions, drawingIds: drawings });
     }
-    // 3. Living Graveyard Cleanup
+
     const gyTemplateId = tokenDoc.getFlag("necromancer-thrall-helper", "graveyardTemplateId");
-    if (gyTemplateId && canvas.scene) {
-        const tmpl = canvas.scene.templates.get(gyTemplateId);
-        if (tmpl) await tmpl.delete();
+    if (gyTemplateId) {
+        globalThis.NecroThrallHelper.purgeGraphics(sceneId, { templateIds: [gyTemplateId] });
     }
 });
 Hooks.on("pf2e.endTurn", async (combatant, combat, userId) => {
@@ -3805,40 +3940,33 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
         }
     }
 
-    const necroFlags = changes.flags?.["necromancer-thrall-helper"];
-    if (necroFlags) {
-        const dmgKeys = Object.keys(necroFlags).filter(k => k.startsWith("dmgType_"));
-        const harmKeys = Object.keys(necroFlags).filter(k => k.startsWith("harmState_"));
+    // Safely check for toggle changes regardless of how Foundry structures the update object
+    const flatChanges = foundry.utils.flattenObject(changes);
+    const hasToggleChange = Object.keys(flatChanges).some(k => k.includes("dmgType_") || k.includes("harmState_"));
 
-        for (const key of dmgKeys) {
-            const tokenId = key.replace("dmgType_", "");
-            const newType = necroFlags[key];
+    if (hasToggleChange) {
+        for (const tokenId of Object.keys(targets)) {
             const targetToken = canvas?.tokens?.get(tokenId);
             if (!targetToken || !targetToken.actor) continue;
-            
+
             const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-            const isUnaffected = (newType === 'vitality' && !negHeal) || (newType === 'void' && negHeal);
-            
-            if (targets[tokenId]) {
-                
+
+            // 1. Check Damage Type Toggles
+            const dmgType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`);
+            if (dmgType) {
+                const isUnaffected = (dmgType === 'vitality' && !negHeal) || (dmgType === 'void' && negHeal);
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isUnaffected;
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = false; 
             }
-        }
-        
-        for (const key of harmKeys) {
-            const tokenId = key.replace("harmState_", "");
-            const newState = necroFlags[key];
-            const targetToken = canvas?.tokens?.get(tokenId);
-            if (!targetToken || !targetToken.actor) continue;
-            
-            const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-            let isHealing = false;
-            if (newState === "void") isHealing = negHeal;
-            if (newState === "vit") isHealing = !negHeal;
-            if (newState === "heal") isHealing = true;
-            
-            if (targets[tokenId]) {
+
+            // 2. Check Harm Toggles
+            const harmState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`);
+            if (harmState) {
+                let isHealing = false;
+                if (harmState === "void") isHealing = negHeal;
+                if (harmState === "vit") isHealing = !negHeal;
+                if (harmState === "heal") isHealing = true;
+
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = isHealing;
                 if (isHealing) {
                     msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = false;
@@ -3850,7 +3978,6 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
     if (!foundry.utils.isEmpty(msgUpdates)) {
         await message.update(msgUpdates, { necroHelperProcessed: true });
         
-
         if (game.modules.get("aoe-easy-resolve")?.api?.refreshCard) {
             await game.modules.get("aoe-easy-resolve").api.refreshCard(message.id);
         }
@@ -4240,78 +4367,116 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
-        const perfectedBtn = html.querySelector(".conjure-perfected-btn");
-        if (perfectedBtn) {
-            perfectedBtn.addEventListener("click", async (e) => {
-                e.preventDefault();
-                const actor = game.actors.get(this.necroId) || game.user.character;
-                if (!actor) return;
+        $(html).off("click", "button:contains('Perfected'), .conjure-perfected-btn").on("click", "button:contains('Perfected'), .conjure-perfected-btn", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const actor = game.actors.get(this.necroId) || game.user.character;
+            if (!actor) return ui.notifications.warn("No Necromancer found!");
 
-                const currentFocus = actor.system?.resources?.focus?.value || 0;
-                if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to conjure a Perfected Thrall!");
+            const currentFocus = actor.system?.resources?.focus?.value || 0;
+            if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to conjure a Perfected Thrall!");
 
-                const perfActor = await getOrImportActor("Perfected Thrall");
-                if (!perfActor) return;
+            let perfActor = game.actors.find(a => a.name === "Perfected Thrall");
+            if (!perfActor) {
+                const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
+                if (!pack) return ui.notifications.error("Could not find the Necromancer Thralls compendium pack.");
+                const index = await pack.getIndex();
+                const entry = index.find(a => a.name === "Perfected Thrall");
+                if (!entry) return ui.notifications.error("Could not find 'Perfected Thrall' in the compendium.");
+                perfActor = await pack.getDocument(entry._id);
+            }
+            if (!perfActor) return;
 
-                await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+            await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
-                ui.notifications.info("Click the canvas to place the Perfected Thrall. Right-click to cancel.");
-                document.body.style.cursor = "crosshair";
-                canvas.app.view.style.cursor = "crosshair";
+            ui.notifications.info("Click the canvas to place the Perfected Thrall within 60 feet. Right-click to cancel.");
+            document.body.style.cursor = "crosshair";
+            canvas.app.view.style.cursor = "crosshair";
 
-                const gridSize = canvas.grid.size;
-                const ghost = new PIXI.Graphics();
-                ghost.beginFill(0x9333ea, 0.35);
-                ghost.lineStyle(2, 0x7e22ce, 0.9);
-                ghost.drawRect(0, 0, gridSize, gridSize);
-                ghost.endFill();
-                ghost.zIndex = 1000;
-                ghost.position.set(-1000, -1000);
-                canvas.tokens.addChild(ghost);
+            let rangeIndicator = null;
+            let necroCenter = null;
+            const necroTokens = actor.getActiveTokens();
+            if (necroTokens.length > 0) {
+                necroCenter = necroTokens[0].center;
+                const rangeInPixels = (60 / canvas.scene.grid.distance) * canvas.grid.size;
+                rangeIndicator = new PIXI.Graphics();
+                rangeIndicator.beginFill(0x22c55e, 0.05);
+                rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                rangeIndicator.endFill();
+                rangeIndicator.zIndex = 998;
+                canvas.tokens.addChild(rangeIndicator);
+            }
 
-                const updateGhost = (evt) => {
-                    const pos = evt.data.getLocalPosition(canvas.app.stage);
-                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                    ghost.position.set(snapped.x, snapped.y);
-                };
+            const gridSize = canvas.grid.size;
+            const ghost = new PIXI.Graphics();
+            ghost.beginFill(0x9333ea, 0.35);
+            ghost.lineStyle(2, 0x7e22ce, 0.9);
+            ghost.drawRect(0, 0, gridSize, gridSize);
+            ghost.endFill();
+            ghost.zIndex = 1000;
+            ghost.position.set(-1000, -1000);
+            canvas.tokens.addChild(ghost);
 
-                canvas.stage.on("pointermove", updateGhost);
+            const updateGhost = (evt) => {
+                const pos = evt.data.getLocalPosition(canvas.app.stage);
+                const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                ghost.position.set(snapped.x, snapped.y);
+            };
 
-                const cleanUp = () => {
-                    document.body.style.cursor = "";
-                    canvas.app.view.style.cursor = "";
-                    canvas.stage.off("pointermove", updateGhost);
-                    ghost.destroy();
-                };
+            canvas.stage.on("pointermove", updateGhost);
 
-                const interactionHandler = async (evt) => {
-                    if (evt.data.button !== 0 && evt.data.button !== 2) {
+            const cleanUp = () => {
+                document.body.style.cursor = "";
+                canvas.app.view.style.cursor = "";
+                canvas.stage.off("pointermove", updateGhost);
+                ghost.destroy();
+                if (rangeIndicator) {
+                    rangeIndicator.destroy();
+                    rangeIndicator = null;
+                }
+            };
+
+            const interactionHandler = async (evt) => {
+                if (evt.data.button !== 0 && evt.data.button !== 2) {
+                    canvas.stage.once("pointerdown", interactionHandler);
+                    return;
+                }
+                if (evt.data.button === 2) {
+                    cleanUp();
+                    return;
+                }
+
+                const pos = evt.data.getLocalPosition(canvas.app.stage);
+                const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+
+                if (necroCenter) {
+                    const targetCenter = { x: snapped.x + (gridSize * 0.5), y: snapped.y + (gridSize * 0.5) };
+                    const dx = Math.abs(necroCenter.x - targetCenter.x);
+                    const dy = Math.abs(necroCenter.y - targetCenter.y);
+                    const dist = (Math.max(dx, dy) / canvas.grid.size) * canvas.scene.grid.distance;
+                    if (dist > 60) {
+                        ui.notifications.warn("The Perfected Thrall must be placed within 60 feet.");
                         canvas.stage.once("pointerdown", interactionHandler);
                         return;
                     }
-                    if (evt.data.button === 2) {
-                        cleanUp();
-                        return;
-                    }
+                }
 
-                    const pos = evt.data.getLocalPosition(canvas.app.stage);
-                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                    cleanUp();
+                cleanUp();
 
-                    const tokenDoc = await perfActor.getTokenDocument({ x: snapped.x, y: snapped.y });
-                    const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                        actorLink: false, 
-                        ownership: { [game.user.id]: 3 }, 
-                        flags: { "necromancer-thrall-helper": { masterId: actor.id, isPerfectedThrall: true } },
-                        delta: { ownership: { [game.user.id]: 3 } }
-                    });
+                const tokenDoc = await perfActor.getTokenDocument({ x: snapped.x, y: snapped.y });
+                const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
+                    actorLink: false, 
+                    ownership: { [game.user.id]: 3 }, 
+                    flags: { "necromancer-thrall-helper": { masterId: actor.id, isPerfectedThrall: true } },
+                    delta: { ownership: { [game.user.id]: 3 } }
+                });
 
-                    await executeSpawn(finalPayload).catch(err => console.error(err));
-                };
+                await executeSpawn(finalPayload).catch(err => console.error(err));
+            };
 
-                canvas.stage.once("pointerdown", interactionHandler);
-            });
-        }
+            canvas.stage.once("pointerdown", interactionHandler);
+        });
 
 
 
@@ -4773,9 +4938,24 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 let currentSpawnIndex = 0;
                 const maxSpawns = 5;
 
-                ui.notifications.info(`Click the canvas to place Skeletal Lancer 1 of ${maxSpawns}. Right-click to finish early.`);
+                ui.notifications.info(`Click the canvas to place Skeletal Lancer 1 of ${maxSpawns} within 60 feet. Right-click to finish early.`);
                 document.body.style.cursor = "crosshair";
                 canvas.app.view.style.cursor = "crosshair";
+
+                let rangeIndicator = null;
+                let necroCenter = null;
+                const necroTokens = actor.getActiveTokens();
+                if (necroTokens.length > 0) {
+                    necroCenter = necroTokens[0].center;
+                    const rangeInPixels = (60 / canvas.scene.grid.distance) * canvas.grid.size;
+                    rangeIndicator = new PIXI.Graphics();
+                    rangeIndicator.beginFill(0x22c55e, 0.05);
+                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                    rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                    rangeIndicator.endFill();
+                    rangeIndicator.zIndex = 998;
+                    canvas.tokens.addChild(rangeIndicator);
+                }
 
                 const gridSize = canvas.grid.size;
                 const ghost = new PIXI.Graphics();
@@ -4800,6 +4980,10 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     canvas.app.view.style.cursor = "";
                     canvas.stage.off("pointermove", updateGhost);
                     ghost.destroy();
+                    if (rangeIndicator) {
+                        rangeIndicator.destroy();
+                        rangeIndicator = null;
+                    }
                 };
 
                 const interactionHandler = async (evt) => {
@@ -4816,6 +5000,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
                     const pos = evt.data.getLocalPosition(canvas.app.stage);
                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+
+                    if (necroCenter) {
+                        const targetCenter = { x: snapped.x + (gridSize * 0.5), y: snapped.y + (gridSize * 0.5) };
+                        const dx = Math.abs(necroCenter.x - targetCenter.x);
+                        const dy = Math.abs(necroCenter.y - targetCenter.y);
+                        const dist = (Math.max(dx, dy) / canvas.grid.size) * canvas.scene.grid.distance;
+                        if (dist > 60) {
+                            ui.notifications.warn("Skeletal Lancers must be placed within 60 feet.");
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
+                    }
 
                     const tokenDoc = await lancerActor.getTokenDocument({ x: snapped.x, y: snapped.y });
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
@@ -4841,154 +5037,194 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 canvas.stage.once("pointerdown", interactionHandler);
             });
         }
-// --- CONJURE / SUSTAIN RECURRING NIGHTMARE ---
-const nightmareBtn = html.querySelector(".conjure-nightmare-btn, .sustain-nightmare-btn");
-if (nightmareBtn) {
-    nightmareBtn.addEventListener("click", async (e) => {
-        e.preventDefault();
-        const isSustain = e.currentTarget.classList.contains("sustain-nightmare-btn");
-        const actor = game.actors.get(this.necroId) || game.user.character;
-        if (!actor) return;
 
-        const currentCombat = game.combat;
-        const currentRound = currentCombat ? currentCombat.round : `ooc_${Date.now()}`;
+        // --- CONJURE / SUSTAIN RECURRING NIGHTMARE ---
+        const nightmareBtn = html.querySelector(".conjure-nightmare-btn, .sustain-nightmare-btn");
+        if (nightmareBtn) {
+            nightmareBtn.addEventListener("click", async (e) => {
+                e.preventDefault();
+                const isSustain = e.currentTarget.classList.contains("sustain-nightmare-btn");
+                const actor = game.actors.get(this.necroId) || game.user.character;
+                if (!actor) return;
 
-        if (isSustain) {
-            const lastSustained = actor.getFlag("necromancer-thrall-helper", "nightmareSustainRound");
-            if (currentCombat && lastSustained === currentRound) {
-                return ui.notifications.warn("You can only resummon the Recurring Nightmare once per round.");
-            }
-        } else {
-            const currentFocus = actor.system?.resources?.focus?.value || 0;
-            if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to cast Recurring Nightmare!");
-            await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+                const currentCombat = game.combat;
+                const currentRound = currentCombat ? currentCombat.round : `ooc_${Date.now()}`;
+
+                if (isSustain) {
+                    const lastSustained = actor.getFlag("necromancer-thrall-helper", "nightmareSustainRound");
+                    if (currentCombat && lastSustained === currentRound) {
+                        return ui.notifications.warn("You can only resummon the Recurring Nightmare once per round.");
+                    }
+                } else {
+                    const currentFocus = actor.system?.resources?.focus?.value || 0;
+                    if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to cast Recurring Nightmare!");
+                    await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+                }
+
+                ui.notifications.info("Click the canvas within 60 feet (even on occupied spaces) to manifest the Nightmare. Right-click to cancel.");
+                document.body.style.cursor = "crosshair";
+                canvas.app.view.style.cursor = "crosshair";
+
+                let rangeIndicator = null;
+                let necroCenter = null;
+                const necroTokens = actor.getActiveTokens();
+                if (necroTokens.length > 0) {
+                    necroCenter = necroTokens[0].center;
+                    const rangeInPixels = (60 / canvas.scene.grid.distance) * canvas.grid.size;
+                    rangeIndicator = new PIXI.Graphics();
+                    rangeIndicator.beginFill(0x22c55e, 0.05);
+                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                    rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                    rangeIndicator.endFill();
+                    rangeIndicator.zIndex = 998;
+                    canvas.tokens.addChild(rangeIndicator);
+                }
+
+                const gridSize = canvas.scene.grid.size;
+                const ghost = new PIXI.Graphics();
+                ghost.beginFill(0x38bdf8, 0.35);
+                ghost.lineStyle(2, 0x0284c7, 0.9);
+                ghost.drawRect(0, 0, gridSize, gridSize);
+                ghost.endFill();
+                ghost.zIndex = 1000;
+                ghost.position.set(-1000, -1000);
+                canvas.tokens.addChild(ghost);
+
+                const updateGhost = (evt) => {
+                    const pos = evt.data.getLocalPosition(canvas.app.stage);
+                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                    ghost.position.set(snapped.x, snapped.y);
+                };
+
+                canvas.stage.on("pointermove", updateGhost);
+
+                const cleanUp = () => {
+                    document.body.style.cursor = "";
+                    canvas.app.view.style.cursor = "";
+                    canvas.stage.off("pointermove", updateGhost);
+                    ghost.destroy();
+                    if (rangeIndicator) {
+                        rangeIndicator.destroy();
+                        rangeIndicator = null;
+                    }
+                };
+
+                const interactionHandler = async (evt) => {
+                    if (evt.data.button !== 0 && evt.data.button !== 2) {
+                        canvas.stage.once("pointerdown", interactionHandler);
+                        return;
+                    }
+                    if (evt.data.button === 2) {
+                        cleanUp();
+                        return;
+                    }
+
+                    const pos = evt.data.getLocalPosition(canvas.app.stage);
+                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+
+                    if (necroCenter) {
+                        const targetCenter = { x: snapped.x + (gridSize * 0.5), y: snapped.y + (gridSize * 0.5) };
+                        const dx = Math.abs(necroCenter.x - targetCenter.x);
+                        const dy = Math.abs(necroCenter.y - targetCenter.y);
+                        const dist = (Math.max(dx, dy) / canvas.grid.size) * canvas.scene.grid.distance;
+                        if (dist > 60) {
+                            ui.notifications.warn("The Recurring Nightmare must be placed within 60 feet.");
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
+                    }
+
+                    cleanUp();
+
+                    const nightmareActor = await getOrImportActor("Recurring Nightmare");
+                    if (!nightmareActor) return;
+
+                    const tokenDoc = await nightmareActor.getTokenDocument({ x: snapped.x, y: snapped.y });
+
+                    const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
+                        actorLink: false, 
+                        ownership: { [game.user.id]: 3 }, 
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        delta: { ownership: { [game.user.id]: 3 } }
+                    });
+                    applyCustomVisuals(finalPayload, actor, "nightmare");
+
+                    const [createdToken] = await executeSpawn(finalPayload);
+
+                    if (isSustain && currentCombat) {
+                        await actor.setFlag("necromancer-thrall-helper", "nightmareSustainRound", currentRound);
+                    }
+                    await actor.unsetFlag("necromancer-thrall-helper", "nightmareDestroyed");
+
+                    let attempts = 0;
+                    const triggerHaunt = async () => {
+                        const liveTokenDoc = canvas.scene.tokens.get(createdToken.id);
+                        if (liveTokenDoc) {
+                            globalThis.NecroThrallHelper?.checkNightmareHaunt(liveTokenDoc);
+                        } else if (attempts < 20) {
+                            attempts++;
+                            setTimeout(triggerHaunt, 100);
+                        }
+                    };
+                    triggerHaunt();
+
+                    this.render({ force: false });
+
+                    await ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ actor: actor }),
+                        flavor: `<strong>Recurring Nightmare</strong>`,
+                        content: `<p><b>${actor.name}</b> ${isSustain ? "Sustains the nightmare, resummoning" : "conjures"} the <b>Recurring Nightmare</b> into reality!</p>`
+                    });
+                };
+                
+                canvas.stage.once("pointerdown", interactionHandler);
+            });
         }
 
-        ui.notifications.info("Click the canvas within 60 feet (even on occupied spaces) to manifest the Nightmare.");
-        document.body.style.cursor = "crosshair";
-        canvas.app.view.style.cursor = "crosshair";
+        if (!html.querySelector(".dismiss-all-btn")) {
+            const tempDiv = document.createElement("div");
+            tempDiv.innerHTML = `<button type="button" class="dismiss-all-btn" style="margin-top: 15px; width: 100%; padding: 6px;">Dismiss All Thralls</button>`;
+            html.appendChild(tempDiv.firstElementChild);
+        }
 
-        const gridSize = canvas.scene.grid.size;
-        const ghost = new PIXI.Graphics();
-        ghost.beginFill(0x38bdf8, 0.35);
-        ghost.lineStyle(2, 0x0284c7, 0.9);
-        ghost.drawRect(0, 0, gridSize, gridSize);
-        ghost.endFill();
-        ghost.zIndex = 1000;
-        ghost.position.set(-1000, -1000);
-        canvas.tokens.addChild(ghost);
+        const dismissBtn = html.querySelector(".dismiss-all-btn");
+        if (dismissBtn) {
+            dismissBtn.addEventListener("click", async (e) => {
+                e.preventDefault();
+                dismissBtn.disabled = true;
 
-        const updateGhost = (evt) => {
-            const pos = evt.data.getLocalPosition(canvas.app.stage);
-            const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-            ghost.position.set(snapped.x, snapped.y);
-        };
+                const actor = game.actors.get(this.necroId) || game.user.character;
 
-        canvas.stage.on("pointermove", updateGhost);
+                try {
+                    for (const combat of game.combats) {
+                        const badIds = combat.combatants.filter(c => {
+                            if (!c.actor || !c.token || !canvas.scene.tokens.get(c.tokenId)) return true;
+                            if (actor && c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
+                            return false;
+                        }).map(c => c.id);
 
-        const cleanUp = () => {
-            document.body.style.cursor = "";
-            canvas.app.view.style.cursor = "";
-            canvas.stage.off("pointermove", updateGhost);
-            ghost.destroy();
-        };
-
-        canvas.stage.once("pointerdown", async (evt) => {
-            if (evt.data.button !== 0) { cleanUp(); return; }
-
-            const pos = evt.data.getLocalPosition(canvas.app.stage);
-            const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-
-            cleanUp();
-
-            const nightmareActor = await getOrImportActor("Recurring Nightmare");
-            if (!nightmareActor) { cleanUp(); return; }
-
-            // 2. Generate token document payload
-            const tokenDoc = await nightmareActor.getTokenDocument({ x: snapped.x, y: snapped.y });
-
-            const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
-                actorLink: false, 
-                ownership: { [game.user.id]: 3 }, 
-                flags: { "necromancer-thrall-helper": { masterId: actor.id } },
-                delta: { ownership: { [game.user.id]: 3 } }
-            });
-            applyCustomVisuals(finalPayload, actor, "nightmare");
-
-            const [createdToken] = await executeSpawn(finalPayload);
-
-            if (isSustain && currentCombat) {
-                await actor.setFlag("necromancer-thrall-helper", "nightmareSustainRound", currentRound);
-            }
-            await actor.unsetFlag("necromancer-thrall-helper", "nightmareDestroyed");
-
-            // Evaluate fear prompt on initial placement (Dynamic Polling)
-            let attempts = 0;
-            const triggerHaunt = async () => {
-                const liveTokenDoc = canvas.scene.tokens.get(createdToken.id);
-                if (liveTokenDoc) {
-                    globalThis.NecroThrallHelper?.checkNightmareHaunt(liveTokenDoc);
-                } else if (attempts < 20) {
-                    attempts++;
-                    setTimeout(triggerHaunt, 100);
-                }
-            };
-            triggerHaunt();
-
-            this.render({ force: false });
-
-            await ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                flavor: `<strong>Recurring Nightmare</strong>`,
-                content: `<p><b>${actor.name}</b> ${isSustain ? "Sustains the nightmare, resummoning" : "conjures"} the <b>Recurring Nightmare</b> into reality!</p>`
-            });
-        });
-    });
- 
-    if (!html.querySelector(".dismiss-all-btn")) {
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = `<button type="button" class="dismiss-all-btn" style="margin-top: 15px; width: 100%; padding: 6px;">Dismiss All Thralls</button>`;
-        html.appendChild(tempDiv.firstElementChild);
-    }
-
-    const dismissBtn = html.querySelector(".dismiss-all-btn");
-    if (dismissBtn) {
-        dismissBtn.addEventListener("click", async (e) => {
-            e.preventDefault();
-            dismissBtn.disabled = true;
-
-            const actor = game.actors.get(this.necroId) || game.user.character;
-
-            try {
-                for (const combat of game.combats) {
-                    const badIds = combat.combatants.filter(c => {
-                        if (!c.actor || !c.token || !canvas.scene.tokens.get(c.tokenId)) return true;
-                        if (actor && c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
-                        return false;
-                    }).map(c => c.id);
-
-                    if (badIds.length > 0) {
-                        await combat.deleteEmbeddedDocuments("Combatant", badIds);
+                        if (badIds.length > 0) {
+                            await combat.deleteEmbeddedDocuments("Combatant", badIds);
+                        }
                     }
-                }
 
-                if (canvas.scene && actor) {
-                    const thrallIds = canvas.scene.tokens.filter(t => 
-                        t.getFlag("necromancer-thrall-helper", "masterId") === actor.id
-                    ).map(t => t.id);
+                    if (canvas.scene && actor) {
+                        const thrallIds = canvas.scene.tokens.filter(t => 
+                            t.getFlag("necromancer-thrall-helper", "masterId") === actor.id
+                        ).map(t => t.id);
 
-                    if (thrallIds.length > 0) {
-                        await canvas.scene.deleteEmbeddedDocuments("Token", thrallIds);
+                        if (thrallIds.length > 0) {
+                            await canvas.scene.deleteEmbeddedDocuments("Token", thrallIds);
+                        }
                     }
+                } finally {
+                    dismissBtn.disabled = false;
+                    this.render(false);
                 }
-            } finally {
-                dismissBtn.disabled = false;
-                this.render(false);
-            }
-        });
-    }
-}
-const endNightmareBtn = html.querySelector(".end-nightmare-btn");
+            });
+        }
+
+        const endNightmareBtn = html.querySelector(".end-nightmare-btn");
         if (endNightmareBtn) {
             endNightmareBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
@@ -5145,174 +5381,199 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     e.preventDefault();
                     e.stopPropagation();
                     
-                    console.log("Necromancer Helper | Summon Graveyard button clicked.");
-
-                if (this._isPlacingGraveyard) {
-                    return ui.notifications.warn("You are already placing a Graveyard! Right-click the canvas to cancel first.");
-                }
-                this._isPlacingGraveyard = true;
-
-                const actor = game.actors.get(this.necroId) || game.user.character;
-                if (!actor) { this._isPlacingGraveyard = false; return; }
-                
-                const spell = actor.items.find(i => i.name === "Living Graveyard");
-                if (!spell) { this._isPlacingGraveyard = false; return ui.notifications.warn("Living Graveyard spell not found on your sheet."); }
-
-                const currentFocus = actor.system?.resources?.focus?.value || 0;
-                if (currentFocus === 0) { this._isPlacingGraveyard = false; return ui.notifications.warn("You have no Focus Points to cast Living Graveyard!"); }
-
-              
-                await actor.update({ "system.resources.focus.value": currentFocus - 1 });
-
-                const graveyardActor = await getOrImportActor("Living Graveyard");
-                if (!graveyardActor) { this._isPlacingGraveyard = false; return; }
-
-                ui.notifications.info("Click to place the Living Graveyard. Right-click to cancel.");
-                document.body.style.cursor = "crosshair";
-                canvas.app.view.style.cursor = "crosshair";
-
-                const gridSize = canvas.grid.size;
-                const ghost = new PIXI.Graphics();
-                ghost.beginFill(0x1f2937, 0.4);
-                ghost.lineStyle(2, 0x4b5563, 0.9);
-                ghost.drawRect(0, 0, gridSize * 4, gridSize * 4);
-                ghost.endFill();
-                ghost.zIndex = 1000;
-                canvas.tokens.addChild(ghost);
-
-                const updateGhost = (evt) => {
-                    const pos = evt.data.getLocalPosition(canvas.app.stage);
-                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                    ghost.position.set(snapped.x, snapped.y);
-                };
-
-                canvas.stage.on("pointermove", updateGhost);
-
-                const cleanUp = () => {
-                    this._isPlacingGraveyard = false;
-                    document.body.style.cursor = "";
-                    canvas.app.view.style.cursor = "";
-                    canvas.stage.off("pointermove", updateGhost);
-                    if (ghost && !ghost.destroyed) ghost.destroy();
-                };
-
-                const interactionHandler = async (evt) => {
-                    if (evt.data.button !== 0 && evt.data.button !== 2) {
-                        canvas.stage.once("pointerdown", interactionHandler);
-                        return;
+                    if (this._isPlacingGraveyard) {
+                        return ui.notifications.warn("You are already placing a Graveyard! Right-click the canvas to cancel first.");
                     }
-                    if (evt.data.button === 2) { 
-                     
-                        await actor.update({ "system.resources.focus.value": currentFocus });
-                        cleanUp(); 
-                        return; 
+                    this._isPlacingGraveyard = true;
+    
+                    const actor = game.actors.get(this.necroId) || game.user.character;
+                    if (!actor) { this._isPlacingGraveyard = false; return; }
+                    
+                    const spell = actor.items.find(i => i.name === "Living Graveyard");
+                    if (!spell) { this._isPlacingGraveyard = false; return ui.notifications.warn("Living Graveyard spell not found on your sheet."); }
+    
+                    const currentFocus = actor.system?.resources?.focus?.value || 0;
+                    if (currentFocus === 0) { this._isPlacingGraveyard = false; return ui.notifications.warn("You have no Focus Points to cast Living Graveyard!"); }
+    
+                    await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+    
+                    const graveyardActor = await getOrImportActor("Living Graveyard");
+                    if (!graveyardActor) { this._isPlacingGraveyard = false; return; }
+    
+                    ui.notifications.info("Click to place the Living Graveyard within 120 feet. Right-click to cancel.");
+                    document.body.style.cursor = "crosshair";
+                    canvas.app.view.style.cursor = "crosshair";
+    
+                    let rangeIndicator = null;
+                    let necroCenter = null;
+                    const necroTokens = actor.getActiveTokens();
+                    if (necroTokens.length > 0) {
+                        necroCenter = necroTokens[0].center;
+                        const rangeInPixels = (120 / canvas.scene.grid.distance) * canvas.grid.size;
+                        rangeIndicator = new PIXI.Graphics();
+                        rangeIndicator.beginFill(0x22c55e, 0.05);
+                        rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                        rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                        rangeIndicator.endFill();
+                        rangeIndicator.zIndex = 998;
+                        canvas.tokens.addChild(rangeIndicator);
                     }
-
-                    const pos = evt.data.getLocalPosition(canvas.app.stage);
-                    const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                    cleanUp();
-
-                    let payload = (await graveyardActor.getTokenDocument()).toObject();
-                    payload.x = snapped.x; payload.y = snapped.y;
-                    payload.name = "Living Graveyard"; 
-                    payload.delta = { ownership: { [game.user.id]: 3 } };
-                    payload.flags = { "necromancer-thrall-helper": { masterId: actor.id, isLivingGraveyard: true } };
-                    payload = applyCustomVisuals(payload, actor, "graveyard");
-                    
-                    const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
-                    
-                    if (newTokenDoc && newTokenDoc.actor) {
-                        const effectData = {
-                            name: "Living Graveyard Logic", type: "effect", img: "icons/environment/wilderness/monolith-stone-grey.webp",
-                            system: {
-                                duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                                rules: [] 
-                            },
-                            flags: { "necromancer-thrall-helper": { isLivingGraveyard: true } }
-                        };
-                        await newTokenDoc.actor.createEmbeddedDocuments("Item", [effectData]);
-
-                    
-                        const [templateDoc] = await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
-                            t: "circle", user: game.user.id,
-                            x: snapped.x + (gridSize * 2), y: snapped.y + (gridSize * 2),
-                            distance: 20, fillColor: game.user.color || "#4b5563", fillAlpha: 0.15,
-                            flags: {} 
-                        }]);
-
-                        const templateId = templateDoc ? templateDoc.id : null;
+    
+                    const gridSize = canvas.grid.size;
+                    const ghost = new PIXI.Graphics();
+                    ghost.beginFill(0x1f2937, 0.4);
+                    ghost.lineStyle(2, 0x4b5563, 0.9);
+                    ghost.drawRect(0, 0, gridSize * 4, gridSize * 4);
+                    ghost.endFill();
+                    ghost.zIndex = 1000;
+                    canvas.tokens.addChild(ghost);
+    
+                    const updateGhost = (evt) => {
+                        const pos = evt.data.getLocalPosition(canvas.app.stage);
+                        const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                        ghost.position.set(snapped.x, snapped.y);
+                    };
+    
+                    canvas.stage.on("pointermove", updateGhost);
+    
+                    const cleanUp = () => {
+                        this._isPlacingGraveyard = false;
+                        document.body.style.cursor = "";
+                        canvas.app.view.style.cursor = "";
+                        canvas.stage.off("pointermove", updateGhost);
+                        if (ghost && !ghost.destroyed) ghost.destroy();
+                        if (rangeIndicator) {
+                            rangeIndicator.destroy();
+                            rangeIndicator = null;
+                        }
+                    };
+    
+                    const interactionHandler = async (evt) => {
+                        if (evt.data.button !== 0 && evt.data.button !== 2) {
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
+                        if (evt.data.button === 2) { 
+                            await actor.update({ "system.resources.focus.value": currentFocus });
+                            cleanUp(); 
+                            return; 
+                        }
+    
+                        const pos = evt.data.getLocalPosition(canvas.app.stage);
+                        const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+    
+                        if (necroCenter) {
+                            const targetCenter = { x: snapped.x + (gridSize * 2), y: snapped.y + (gridSize * 2) };
+                            const dx = Math.abs(necroCenter.x - targetCenter.x);
+                            const dy = Math.abs(necroCenter.y - targetCenter.y);
+                            const dist = (Math.max(dx, dy) / canvas.grid.size) * canvas.scene.grid.distance;
+                            if (dist > 120) {
+                                ui.notifications.warn("The Living Graveyard must be placed within 120 feet.");
+                                canvas.stage.once("pointerdown", interactionHandler);
+                                return;
+                            }
+                        }
+    
+                        cleanUp();
+    
+                        let payload = (await graveyardActor.getTokenDocument()).toObject();
+                        payload.x = snapped.x; payload.y = snapped.y;
+                        payload.name = "Living Graveyard"; 
+                        payload.delta = { ownership: { [game.user.id]: 3 } };
+                        payload.flags = { "necromancer-thrall-helper": { masterId: actor.id, isLivingGraveyard: true } };
+                        payload = applyCustomVisuals(payload, actor, "graveyard");
                         
-                        if (templateId && newTokenDoc) {
-                            await newTokenDoc.update({ "flags.necromancer-thrall-helper.graveyardTemplateId": templateId });
-                        }
-
-                        let exactDC = 10 + Math.floor((actor.level || 1) * 1.5);
-                        if (actor.spellcasting) {
-                            const entries = typeof actor.spellcasting.contents === "function" ? actor.spellcasting.contents() : Array.from(actor.spellcasting);
-                            let maxDC = 0;
-                            for (const entry of entries) {
-                                const dcVal = entry.dc?.value || entry.statistic?.dc?.value || entry.system?.dc?.value;
-                                if (dcVal && dcVal > maxDC) maxDC = dcVal;
+                        const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
+                        
+                        if (newTokenDoc && newTokenDoc.actor) {
+                            const effectData = {
+                                name: "Living Graveyard Logic", type: "effect", img: "icons/environment/wilderness/monolith-stone-grey.webp",
+                                system: {
+                                    duration: { value: 1, unit: "minutes", expiry: "turn-start" },
+                                    rules: [] 
+                                },
+                                flags: { "necromancer-thrall-helper": { isLivingGraveyard: true } }
+                            };
+                            await newTokenDoc.actor.createEmbeddedDocuments("Item", [effectData]);
+    
+                            const [templateDoc] = await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
+                                t: "circle", user: game.user.id,
+                                x: snapped.x + (gridSize * 2), y: snapped.y + (gridSize * 2),
+                                distance: 20, fillColor: game.user.color || "#4b5563", fillAlpha: 0.15,
+                                flags: {} 
+                            }]);
+    
+                            const templateId = templateDoc ? templateDoc.id : null;
+                            if (templateId && newTokenDoc) {
+                                await newTokenDoc.update({ "flags.necromancer-thrall-helper.graveyardTemplateId": templateId });
                             }
-                            if (maxDC > 0) exactDC = maxDC;
-                        }
-                        if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) exactDC = actor.system.attributes.classDC.dc.value;
-
-                        await spell.update({
-                            "system.defense.save.statistic": "fortitude",
-                            "system.defense.save.basic": false,
-                            "system.defense.save.dc.value": exactDC
-                        });
-
-                        const targetsData = {};
-                        const validTargets = canvas.tokens.placeables.filter(t => {
-                            if (!t.actor || t.id === newTokenDoc.id) return false;
-                            const dist = Math.hypot(t.center.x - (snapped.x + (gridSize * 2)), t.center.y - (snapped.y + (gridSize * 2)));
-                            return dist <= ((20 / canvas.scene.grid.distance) * gridSize);
-                        });
-                        validTargets.forEach(t => {
-                            targetsData[t.id] = { id: t.id, name: t.name, img: t.document.texture.src, hasRolled: false, isHealing: false, isImmune: false, hasApplied: false };
-                        });
-
-                        const templatePath = "modules/aoe-easy-resolve/templates/chat-card.hbs";
-                        const aoeHtmlContent = await renderTemplate(templatePath, {
-                            targets: Object.values(targetsData),
-                            itemName: "Living Graveyard",
-                            saveType: "Fortitude",
-                            saveDC: exactDC
-                        });
-
-                     
-                        await ChatMessage.create({
-                            speaker: ChatMessage.getSpeaker({ actor: actor }),
-                            flavor: `<strong>Living Graveyard Spawned!</strong>`,
-                            content: `
-                                <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4b5563;">
-                                    <p style="margin: 0 0 5px 0;">The ground violently erupts as a Gargantuan mass of earth and tombstones rises!</p>
-                                    <p style="margin: 0 0 5px 0;"><b>Violent Shake:</b> All creatures in a 10-foot emanation must succeed at a Fortitude save or fall prone.</p>
-                                    <hr>${aoeHtmlContent}
-                                </div>
-                            `,
-                            flags: { 
-                                "aoe-easy-resolve": {
-                                    templateId: templateId, 
-                                    documentName: "ManualTarget", 
-                                    itemUuid: spell.uuid,
-                                    itemName: "Living Graveyard", 
-                                    saveType: "fortitude", 
-                                    saveDC: exactDC,
-                                    isBasicSave: false, 
-                                    targets: targetsData, 
-                                    hazardDamage: null, 
-                                    isReactive: false, 
-                                    originMessageId: null
+    
+                            let exactDC = 10 + Math.floor((actor.level || 1) * 1.5);
+                            if (actor.spellcasting) {
+                                const entries = typeof actor.spellcasting.contents === "function" ? actor.spellcasting.contents() : Array.from(actor.spellcasting);
+                                let maxDC = 0;
+                                for (const entry of entries) {
+                                    const dcVal = entry.dc?.value || entry.statistic?.dc?.value || entry.system?.dc?.value;
+                                    if (dcVal && dcVal > maxDC) maxDC = dcVal;
                                 }
+                                if (maxDC > 0) exactDC = maxDC;
                             }
-                        });
-                    }
-                };
-                canvas.stage.once("pointerdown", interactionHandler);
-            });
+                            if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) exactDC = actor.system.attributes.classDC.dc.value;
+    
+                            await spell.update({
+                                "system.defense.save.statistic": "fortitude",
+                                "system.defense.save.basic": false,
+                                "system.defense.save.dc.value": exactDC
+                            });
+    
+                            const targetsData = {};
+                            const validTargets = canvas.tokens.placeables.filter(t => {
+                                if (!t.actor || t.id === newTokenDoc.id) return false;
+                                const dist = Math.hypot(t.center.x - (snapped.x + (gridSize * 2)), t.center.y - (snapped.y + (gridSize * 2)));
+                                return dist <= ((20 / canvas.scene.grid.distance) * gridSize);
+                            });
+                            validTargets.forEach(t => {
+                                targetsData[t.id] = { id: t.id, name: t.name, img: t.document.texture.src, hasRolled: false, isHealing: false, isImmune: false, hasApplied: false };
+                            });
+    
+                            const templatePath = "modules/aoe-easy-resolve/templates/chat-card.hbs";
+                            const aoeHtmlContent = await renderTemplate(templatePath, {
+                                targets: Object.values(targetsData),
+                                itemName: "Living Graveyard",
+                                saveType: "Fortitude",
+                                saveDC: exactDC
+                            });
+    
+                            await ChatMessage.create({
+                                speaker: ChatMessage.getSpeaker({ actor: actor }),
+                                flavor: `<strong>Living Graveyard Spawned!</strong>`,
+                                content: `
+                                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4b5563;">
+                                        <p style="margin: 0 0 5px 0;">The ground violently erupts as a Gargantuan mass of earth and tombstones rises!</p>
+                                        <p style="margin: 0 0 5px 0;"><b>Violent Shake:</b> All creatures in a 10-foot emanation must succeed at a Fortitude save or fall prone.</p>
+                                        <hr>${aoeHtmlContent}
+                                    </div>
+                                `,
+                                flags: { 
+                                    "aoe-easy-resolve": {
+                                        templateId: templateId, 
+                                        documentName: "ManualTarget", 
+                                        itemUuid: spell.uuid,
+                                        itemName: "Living Graveyard", 
+                                        saveType: "fortitude", 
+                                        saveDC: exactDC,
+                                        isBasicSave: false, 
+                                        targets: targetsData, 
+                                        hazardDamage: null, 
+                                        isReactive: false, 
+                                        originMessageId: null
+                                    }
+                                }
+                            });
+                        }
+                    };
+                    canvas.stage.once("pointerdown", interactionHandler);
+                });
         }
     }
         const shedBtn = html.querySelector(".graveyard-shed-btn");
@@ -7016,7 +7277,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                             text: "GREATER DIFFICULT TERRAIN\n(Flesh Tsunami)", fontSize: 16, textColor: "#ffffff"
                                         }]);
 
-                                        setTimeout(() => { if (canvas.scene && canvas.scene.drawings.has(marker.id)) marker.delete(); }, 20000);
+                                        setTimeout(() => { if (canvas.scene && canvas.scene.drawings.has(marker.id)) globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { drawingIds: [marker.id] }); }, 20000);
                                         
                                         await tsunamiSpell.toMessage(e);
                                         ui.notifications.info("Draw your 60-foot cone starting from the marked origin point.");
@@ -7681,8 +7942,12 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                     icon: '<i class="fas fa-seedling"></i>',
                                     label: "Bloom",
                                     callback: async () => {
-                                        await actor.update({ "system.resources.focus.value": currentFocus - 1 });
-
+                                        const currentFocus = actor.system?.resources?.focus?.value || 0;
+                                        if (currentFocus <= 0) {
+                                            return ui.notifications.warn("You have no Focus Points remaining!");
+                                        }
+                                        if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
+                                        
                                         const gridSize = canvas.scene.grid.size;
                                         const gridDist = canvas.scene.grid.distance;
                                         const radiusPixels = (20 / gridDist) * gridSize;
@@ -7692,8 +7957,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
 
                                         let bgSpell = actor.items.find(i => i.type === "spell" && i.name === "Blossoming Gore Hazard");
                                         const persistentRules = [
-                                            { context: "tokenEnter", outcome: "always", promptSave: true, alliance: "enemy" },
-                                            { context: "tokenTurnStart", outcome: "always", promptSave: true, alliance: "enemy" }
+                                            { context: "tokenTurnEnd", outcome: "always", promptSave: true, alliance: "enemy" }
                                         ];
 
                                         const spellSystemData = {
@@ -7730,52 +7994,96 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         await bgSpell.setFlag("necromancer-thrall-helper", "bleedDmg", bleedDmg);
 
                                         const behaviorSource = `
-                                            if (!event.region.getFlag("necromancer-thrall-helper", "isArmed")) return;
-                                            if (game.modules.get('aoe-easy-resolve')?.api?.handleRegionEvent) {
+                                        const targetActor = event.data.token?.actor;
+                                        if (!targetActor) return;
+                                        
+                                        const alliance = targetActor.system?.details?.alliance || targetActor.alliance;
+                                        const isEnemy = alliance === "opposition" || event.data.token.disposition === CONST.TOKEN_DISPOSITIONS.HOSTILE;
+                                        if (!isEnemy) return;
+
+                                        if (event.name === "tokenEnter" || event.name === "tokenTurnStart") {
+                                            const bleedCondition = {
+                                                type: 'condition',
+                                                name: 'Persistent Damage',
+                                                system: {
+                                                    slug: 'persistent-damage',
+                                                    persistent: { formula: '${bleedDmg}', damageType: 'bleed', dc: 15 }
+                                                }
+                                            };
+                                            if (game.user.isGM) {
+                                                targetActor.createEmbeddedDocuments('Item', [bleedCondition]).catch(()=>{});
+                                            } else {
+                                                game.socket.emit("module.necromancer-thrall-helper", {
+                                                    action: "addCondition",
+                                                    actorUuid: targetActor.uuid,
+                                                    itemData: bleedCondition
+                                                });
+                                            }
+                                        }
+                                        
+                                        if (event.name === "tokenTurnEnd") {
+                                            const hasBleed = targetActor.items.some(i => i.type === "condition" && i.system.slug === "persistent-damage" && i.system.persistent?.damageType === "bleed");
+                                            if (hasBleed && game.modules.get('aoe-easy-resolve')?.api?.handleRegionEvent) {
                                                 game.modules.get('aoe-easy-resolve').api.handleRegionEvent(event, '${bgSpell.uuid}');
                                             }
-                                        `;
+                                        }
+                                    `;
 
-                                        const regionId = foundry.utils.randomID();
-                                        const regionData = {
-                                            name: `Blossoming Gore`,
-                                            color: "#aa0000",
-                                            shapes: [{ type: "ellipse", hole: false, x: centerX, y: centerY, radiusX: radiusPixels, radiusY: radiusPixels, rotation: 0 }],
-                                            elevation: { bottom: -1000, top: 1000 },
-                                            behaviors: [{
-                                                name: "AoE Easy Resolve Controller",
-                                                type: "executeScript",
-                                                system: {
-                                                    events: ["tokenTurnStart", "tokenEnter"],
-                                                    source: behaviorSource
-                                                }
-                                            }],
-                                            flags: { 
-                                                "necromancer-thrall-helper": { 
-                                                    goreRegionId: regionId,
-                                                    isArmed: false 
-                                                },
-                                                "aoe-easy-resolve": { 
-                                                    isAoERegion: true, originItemUuid: bgSpell.uuid, saveDC: exactDC,
-                                                    persistentRules: persistentRules
-                                                }
+                                    const regionId = foundry.utils.randomID();
+                                    const regionData = {
+                                        name: "Blossoming Gore",
+                                        color: "#aa0000",
+                                        shapes: [{ type: "ellipse", hole: false, x: centerX, y: centerY, radiusX: radiusPixels, radiusY: radiusPixels, rotation: 0 }],
+                                        elevation: { bottom: -1000, top: 1000 },
+                                        behaviors: [{
+                                            name: "Blossoming Gore Controller",
+                                            type: "executeScript",
+                                            system: {
+                                                events: ["tokenTurnStart", "tokenEnter", "tokenTurnEnd"],
+                                                source: behaviorSource
                                             }
-                                        };
+                                        }],
+                                        flags: { 
+                                            "necromancer-thrall-helper": { goreRegionId: regionId },
+                                            "aoe-easy-resolve": { 
+                                                isAoERegion: true, originItemUuid: bgSpell.uuid, saveDC: exactDC,
+                                                persistentRules: persistentRules
+                                            }
+                                        }
+                                    };
 
-                                        const drawingData = {
-                                            author: game.user.id, shape: { type: "e", width: radiusPixels * 2, height: radiusPixels * 2 },
-                                            x: centerX - radiusPixels, y: centerY - radiusPixels,
-                                            fillType: 1, fillColor: "#ff0000", fillAlpha: 0.3,
-                                            strokeWidth: 3, strokeColor: "#880000", strokeAlpha: 0.8,
-                                            flags: { "necromancer-thrall-helper": { goreRegionId: regionId } }
-                                        };
+                                    const drawingData = {
+                                        author: game.user.id, shape: { type: "e", width: radiusPixels * 2, height: radiusPixels * 2 },
+                                        x: centerX - radiusPixels, y: centerY - radiusPixels,
+                                        fillType: 1, fillColor: "#ff0000", fillAlpha: 0.3,
+                                        strokeWidth: 3, strokeColor: "#880000", strokeAlpha: 0.8,
+                                        flags: { "necromancer-thrall-helper": { goreRegionId: regionId } }
+                                    };
 
-                                        const [createdRegion] = await executeHazard(regionData, drawingData);
-                                        await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
+                                    await executeHazard(regionData, drawingData);
+                                    try { await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]); } catch (e) {}
 
-                                        // SAFE DELETION: Let Foundry natively handle the combatant removal
+                                    const trackerEffect = {
+                                        name: "Hazard: Blossoming Gore",
+                                        type: "effect",
+                                        img: "icons/magic/life/heart-cross-plant-green.webp",
+                                        system: {
+                                            description: { value: "Tracks the duration of the Blossoming Gore hazard. Deleting this clears the hazard from the map." },
+                                            duration: { value: 1, unit: "minutes", expiry: "turn-start" }
+                                        },
+                                        flags: {
+                                            "necromancer-thrall-helper": { isHazardTracker: true, hazardId: regionId, sceneId: canvas.scene.id }
+                                        }
+                                    };
+                                    await actor.createEmbeddedDocuments("Item", [trackerEffect]);
+
+                                    if (game.user.isGM) {
+                                        await tokenDoc.delete();
+                                    } else {
                                         await executeDelete(tokenDoc.id);
-                                        this.render({ force: false });
+                                    }
+                                    
+                                    this.render({ force: false });
 
                                         await ChatMessage.create({
                                             speaker: ChatMessage.getSpeaker({ actor: actor }),
@@ -7788,12 +8096,6 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                                 </div>
                                             `
                                         });
-
-                                        setTimeout(async () => {
-                                            if (canvas.scene.regions.has(createdRegion.id)) {
-                                                await createdRegion.setFlag("necromancer-thrall-helper", "isArmed", true);
-                                            }
-                                        }, 2000);
                                     }
                                 },
                                 cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
@@ -8086,7 +8388,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         }]);
 
                                         setTimeout(() => {
-                                            if (canvas.scene && canvas.scene.templates.has(template.id)) template.delete();
+                                            if (canvas.scene && canvas.scene.templates.has(template.id)) globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { templateIds: [template.id] });
                                         }, 20000);
 
                                         if (Object.keys(targetsData).length === 0) {
@@ -8519,7 +8821,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         }]);
 
                                         setTimeout(() => {
-                                            if (canvas.scene && canvas.scene.drawings.has(marker.id)) marker.delete();
+                                            if (canvas.scene && canvas.scene.drawings.has(marker.id)) globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { drawingIds: [marker.id] });
                                         }, 20000);
 
                                         await spearSpell.toMessage(e);
@@ -9121,7 +9423,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                                         }]);
 
                                         setTimeout(() => {
-                                            if (canvas.scene && canvas.scene.drawings.has(marker.id)) marker.delete();
+                                            if (canvas.scene && canvas.scene.drawings.has(marker.id)) globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { drawingIds: [marker.id] });
                                         }, 20000);
                                         
                                         await barrageSpell.toMessage(e);
@@ -9557,9 +9859,24 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 const bonusHP = Math.max(0, spellRank - 4) * 10;
                 const totalHP = 40 + bonusHP;
 
-                ui.notifications.info(`Click the canvas to place the Huge Conglomerate. Right-click to cancel.`);
+                ui.notifications.info(`Click the canvas to place the Huge Conglomerate within 30 feet. Right-click to cancel.`);
                 document.body.style.cursor = "crosshair";
                 canvas.app.view.style.cursor = "crosshair";
+
+                let rangeIndicator = null;
+                let necroCenter = null;
+                const necroTokens = actor.getActiveTokens();
+                if (necroTokens.length > 0) {
+                    necroCenter = necroTokens[0].center;
+                    const rangeInPixels = (30 / canvas.scene.grid.distance) * canvas.grid.size;
+                    rangeIndicator = new PIXI.Graphics();
+                    rangeIndicator.beginFill(0x22c55e, 0.05);
+                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                    rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                    rangeIndicator.endFill();
+                    rangeIndicator.zIndex = 998;
+                    canvas.tokens.addChild(rangeIndicator);
+                }
 
                 const gridSize = canvas.grid.size;
                 const ghost = new PIXI.Graphics();
@@ -9590,6 +9907,10 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     canvas.app.view.style.cursor = "";
                     canvas.stage.off("pointermove", updateGhost);
                     ghost.destroy();
+                    if (rangeIndicator) {
+                        rangeIndicator.destroy();
+                        rangeIndicator = null;
+                    }
                 };
 
                 const interactionHandler = async (event) => {
@@ -9612,9 +9933,7 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         spawnY = snapped.y;
                     }
 
-                    const necroTokens = actor.getActiveTokens();
-                    if (necroTokens.length > 0) {
-                        const necroCenter = necroTokens[0].center;
+                    if (necroCenter) {
                         const targetCenter = { x: spawnX + (gridSize * 1.5), y: spawnY + (gridSize * 1.5) };
                         const dx = Math.abs(necroCenter.x - targetCenter.x);
                         const dy = Math.abs(necroCenter.y - targetCenter.y);
@@ -9717,9 +10036,24 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                 await tendrilsSpell.setFlag("aoe-easy-resolve", "saveType", "reflex");
 
                 let currentSpawnIndex = 0;
-                ui.notifications.info(`Click the canvas to place Tendril ${currentSpawnIndex + 1}. Right-click to cancel.`);
+                ui.notifications.info(`Click the canvas to place Tendril ${currentSpawnIndex + 1} within 30 feet. Right-click to cancel.`);
                 document.body.style.cursor = "crosshair";
                 canvas.app.view.style.cursor = "crosshair";
+
+                let rangeIndicator = null;
+                let necroCenter = null;
+                const necroTokens = actor.getActiveTokens();
+                if (necroTokens.length > 0) {
+                    necroCenter = necroTokens[0].center;
+                    const rangeInPixels = (30 / canvas.scene.grid.distance) * canvas.grid.size;
+                    rangeIndicator = new PIXI.Graphics();
+                    rangeIndicator.beginFill(0x22c55e, 0.05);
+                    rangeIndicator.lineStyle(3, 0x22c55e, 0.5);
+                    rangeIndicator.drawCircle(necroCenter.x, necroCenter.y, rangeInPixels);
+                    rangeIndicator.endFill();
+                    rangeIndicator.zIndex = 998;
+                    canvas.tokens.addChild(rangeIndicator);
+                }
 
                 const gridSize = canvas.grid.size;
                 const ghost = new PIXI.Graphics();
@@ -9751,6 +10085,10 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                     canvas.app.view.style.cursor = "";
                     canvas.stage.off("pointermove", updateGhost);
                     ghost.destroy();
+                    if (rangeIndicator) {
+                        rangeIndicator.destroy();
+                        rangeIndicator = null;
+                    }
                 };
 
                 const interactionHandler = async (event) => {
@@ -9772,6 +10110,18 @@ const endNightmareBtn = html.querySelector(".end-nightmare-btn");
                         const snapped = canvas.grid.getTopLeftPoint(position);
                         spawnX = snapped.x; 
                         spawnY = snapped.y;
+                    }
+
+                    if (necroCenter) {
+                        const targetCenter = { x: spawnX + (gridSize * 0.5), y: spawnY + (gridSize * 0.5) };
+                        const dx = Math.abs(necroCenter.x - targetCenter.x);
+                        const dy = Math.abs(necroCenter.y - targetCenter.y);
+                        const dist = (Math.max(dx, dy) / canvas.grid.size) * canvas.scene.grid.distance;
+                        if (dist > 30) {
+                            ui.notifications.warn("Bloody Tendrils must be placed within 30 feet.");
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
                     }
 
                     const tetherId = foundry.utils.randomID();
