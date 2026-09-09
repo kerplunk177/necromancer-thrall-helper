@@ -227,7 +227,7 @@ if (hasBoneFascination) {
     tokenData.delta.items.push({
         name: "Effect: Bone Fascination",
         type: "effect",
-        img: "icons/equipment/feet/shoes-simple-leather-brown.webp",
+        img: "icons/equipment/feet/boots-collared-green.webp",
         system: {
             description: { value: "Your thralls are well constructed and nimble. They gain a +5 foot bonus to Speed." },
             duration: { value: -1, unit: "unlimited" },

@@ -122,7 +122,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 selectAllBtn.textContent = allChecked ? "Select All" : "Deselect All";
             });
         }
-        // 5. Save / Add Thrall Logic
         const saveBtn = html.querySelector("#save-thrall-btn");
         if (saveBtn) {
             saveBtn.addEventListener("click", async (e) => {
@@ -137,7 +136,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                     return;
                 }
 
-                // If image is blank or inaccessible, fall back to default icon
                 if (!img) {
                     img = "systems/pf2e/icons/default-icons/npc.svg";
                 } else {
@@ -147,7 +145,6 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                             img = "systems/pf2e/icons/default-icons/npc.svg";
                         }
                     } catch (err) {
-                        // Catches permission blocks, CORS issues, or bad paths safely
                         img = "systems/pf2e/icons/default-icons/npc.svg";
                     }
                 }
@@ -204,7 +201,7 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         html.querySelector("#new-thrall-name").value = "";
         html.querySelector("#new-thrall-img").value = "";
         html.querySelector("#new-thrall-custom-adj").value = "";
-        html.querySelector("#new-thrall-unique").checked = true; // Now defaults to true
+        html.querySelector("#new-thrall-unique").checked = true; 
         html.querySelectorAll("input[name='adjective']").forEach(cb => cb.checked = false);
         const saveBtn = html.querySelector("#save-thrall-btn");
         saveBtn.innerHTML = '<i class="fas fa-plus"></i> Add to Portfolio';

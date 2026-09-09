@@ -724,22 +724,22 @@ Hooks.on("updateActor", async (actor, changes, options, userId) => {
     if (!deadToken) return;
 
     const traits = Array.from(actor.system?.traits?.value ?? []);
-    const size = actor.system?.traits?.size?.value;
-    const isCorpseValidSize = size === "sm" || size === "med";
+    const size = actor.system?.traits?.size?.value || actor.size || "med";
+            const isCorpseValidSize = size === "sm" || size === "med";
 
-    const isUndead = traits.includes("undead") || traits.some(t => typeof t === "string" && t.toLowerCase() === "undead");
-    const isConstruct = traits.includes("construct");
-    const isElemental = traits.includes("elemental");
-    const hasInfusedBlood = actor.items.some(i => i.name === "Infused Blood" || i.slug === "infused-blood");
-    const hasBlood = !isConstruct && !isElemental && (!isUndead || hasInfusedBlood);
+            const isUndead = traits.includes("undead") || traits.some(t => typeof t === "string" && t.toLowerCase() === "undead");
+            const isConstruct = traits.includes("construct");
+            const isElemental = traits.includes("elemental");
+            const hasInfusedBlood = actor.items.some(i => i.name === "Infused Blood" || i.slug === "infused-blood");
+            const hasBlood = !isConstruct && !isElemental && (!isUndead || hasInfusedBlood);
 
-    const necromancers = canvas.tokens.placeables.filter(t => {
-        if (!t.actor || t.actor.hasPlayerOwner === false) return false;
-        return t.actor.items.some(i => 
-            i.name === "Inevitable Return" || i.slug === "inevitable-return" ||
-            i.name === "Blood Pool" || i.slug === "blood-pool"
-        );
-    });
+            const necromancers = canvas.tokens.placeables.filter(t => {
+                if (!t.actor) return false;
+                return t.actor.items.some(i => 
+                    i.name === "Inevitable Return" || i.slug === "inevitable-return" ||
+                    i.name === "Blood Pool" || i.slug === "blood-pool"
+                );
+            });
 
     for (const necroToken of necromancers) {
         const necroActor = necroToken.actor;
@@ -845,7 +845,7 @@ Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
     if (hasNoBlood) return;
 
     const necros = canvas.tokens.placeables.filter(t => {
-        if (!t.actor || !t.actor.hasPlayerOwner) return false;
+        if (!t.actor) return false;
         return t.actor.items.some(i => i.name === "Blood Pool" || i.slug === "blood-pool");
     });
 
@@ -2037,7 +2037,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
     const actor = tokenObj.actor;
     if (!actor) return;
     
-    // Strict Owner Check
     if (!actor.isOwner) return;
 
     const alliance = actor.system?.details?.alliance || actor.alliance;
@@ -2047,7 +2046,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
     const poolId = regionDoc.getFlag("necromancer-thrall-helper", "poolId");
     const absorbedFlag = `absorbed_${poolId}`;
     
-    // Lockout to prevent double-dipping on the same pool
     if (actor.getFlag("necromancer-thrall-helper", absorbedFlag)) return;
 
     const healValue = regionDoc.getFlag("necromancer-thrall-helper", "healValue") || 1;
@@ -2065,7 +2063,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
                 icon: '<i class="fas fa-heart"></i>',
                 label: "Absorb (+HP)",
                 callback: async () => {
-                    // Final safety check before executing
                     if (actor.getFlag("necromancer-thrall-helper", absorbedFlag)) return;
                     await actor.setFlag("necromancer-thrall-helper", absorbedFlag, true);
 
@@ -2089,12 +2086,10 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
 
                     // --- PROPER SOCKET EMISSION ---
                     if (game.user.isGM) {
-                        // If GM clicks it, delete locally
                         if (canvas.scene.regions.has(regionDoc.id)) await regionDoc.delete();
                         const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
                         if (drawing) await drawing.delete();
                     } else {
-                        // If Player clicks it, hand the exact IDs to the GM client
                         game.socket.emit("module.necromancer-thrall-helper", {
                             action: "deleteBloodPool",
                             sceneId: canvas.scene.id,
@@ -3951,7 +3946,6 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
 
             const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
 
-            // 1. Check Damage Type Toggles
             const dmgType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`);
             if (dmgType) {
                 const isUnaffected = (dmgType === 'vitality' && !negHeal) || (dmgType === 'void' && negHeal);
@@ -3959,7 +3953,6 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = false; 
             }
 
-            // 2. Check Harm Toggles
             const harmState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`);
             if (harmState) {
                 let isHealing = false;
@@ -6592,7 +6585,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     } else {
                         const rollKeys = Object.keys(existingWeapon.system.damageRolls || {});
                         if (rollKeys.length > 0) {
-                            const firstKey = rollKeys[0]; // PF2e might use 'base' or a random string ID
+                            const firstKey = rollKeys[0]; 
                             if (existingWeapon.system.damageRolls[firstKey].damageType !== damageType) {
                                 await existingWeapon.update({
                                     [`system.damageRolls.${firstKey}.damageType`]: damageType
@@ -6600,7 +6593,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             }
                         }
                     }
-                    // 2. Request the charge buff if needed
                     let addedEffectIds = [];
                     if (totalChargeDice > 0) {
                         const rules = [{
@@ -6620,7 +6612,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         addedEffectIds = createdEffects.map(effect => effect.id);
                     }
 
-                    // 3. DYNAMIC POLLING LOOP: Wait for the network to sync
                     let strike = null;
                     for (let attempts = 0; attempts < 20; attempts++) {
                         const actionsList = tokenDoc.actor?.system?.actions;
@@ -7838,7 +7829,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         }
                         const necroToken = necroTokens[0];
                         
-                        // Enforce the 5-foot adjacency requirement
                         let distance = 999;
                         if (typeof tokenDoc.object?.distanceTo === "function") {
                             distance = tokenDoc.object.distanceTo(necroToken);

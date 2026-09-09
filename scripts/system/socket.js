@@ -51,13 +51,12 @@ async function requestSpawn(payload) {
     const spawnData = foundry.utils.mergeObject(payload, {
         x: payload.x,
         y: payload.y,
-        elevation: (payload.elevation || 0) + 1,
+        sort: 100,
         hidden: false
     });
 
     const createdTokens = await scene.createEmbeddedDocuments("Token", [spawnData]);
     
-    // Clean PIXI layer re-ordering to pop it to the visual top
     if (createdTokens && createdTokens.length > 0) {
         setTimeout(() => {
             const tokenObj = canvas.tokens.get(createdTokens[0].id);
@@ -111,7 +110,7 @@ export async function executeSpawn(payload) {
         const spawnData = foundry.utils.mergeObject(payload, { 
             x: payload.x, 
             y: payload.y, 
-            elevation: (payload.elevation || 0) + 1, 
+            sort: 100, 
             hidden: false 
         });
         const createdTokens = await scene.createEmbeddedDocuments("Token", [spawnData]);
