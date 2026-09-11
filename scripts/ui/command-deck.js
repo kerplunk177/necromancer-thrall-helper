@@ -15,11 +15,9 @@ globalThis.NecroThrallHelper.purgeGraphics = (sceneId, { regionIds = [], drawing
         game.socket.emit("module.necromancer-thrall-helper", { action: "purgeMapGraphics", sceneId, regionIds, drawingIds, templateIds });
     }
 };
-
-Hooks.once("ready", () => {
+Hooks.once("ready", async () => {
     game.socket.on("module.necromancer-thrall-helper", async (data) => {
         if (!game.user.isGM) return; 
-
         if (data.action === "deleteBloodPool") {
             const scene = game.scenes.get(data.sceneId);
             if (!scene) return;
@@ -28,14 +26,10 @@ Hooks.once("ready", () => {
             const drawing = scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === data.poolId);
             if (drawing) await drawing.delete();
         }
-
         if (data.action === "lockDeathReaction") {
             const msg = game.messages.get(data.messageId);
-            if (msg) {
-                await msg.setFlag("necromancer-thrall-helper", "reactionUsed", data.label);
-            }
+            if (msg) await msg.setFlag("necromancer-thrall-helper", "reactionUsed", data.label);
         }
-
         if (data.action === "purgeMapGraphics") {
             const scene = game.scenes.get(data.sceneId);
             if (!scene) return;
@@ -43,31 +37,420 @@ Hooks.once("ready", () => {
             if (data.drawingIds?.length) await scene.deleteEmbeddedDocuments("Drawing", data.drawingIds.filter(id => scene.drawings.has(id))).catch(()=>{});
             if (data.templateIds?.length) await scene.deleteEmbeddedDocuments("MeasuredTemplate", data.templateIds.filter(id => scene.templates.has(id))).catch(()=>{});
         }
-
         if (data.action === "addCondition") {
             const targetActor = await fromUuid(data.actorUuid);
             if (targetActor) await targetActor.createEmbeddedDocuments("Item", [data.itemData]).catch(()=>{});
         }
     });
-});
 
-
-Hooks.once("ready", async () => {
-    if (!game.user.isGM) return;
-    const requiredActors = ["Thrall", "Perfected Thrall", "Skeletal Lancer", "Recurring Nightmare", "Living Graveyard", "Bloody Tendril", "Conglomerate of Limbs"];
-    const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
-    if (!pack) return;
-
-    const index = await pack.getIndex();
-    let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
-
-    for (const name of requiredActors) {
-        if (!game.actors.find(a => a.name === name)) {
-            if (!folder) folder = await Folder.create({ name: "Necromancer Thralls", type: "Actor", color: "#4b5563" });
-            const entry = index.find(a => a.name === name);
-            if (entry) await game.actors.importFromCompendium(pack, entry._id, { folder: folder.id });
+    if (game.user.isGM) {
+        const requiredActors = ["Thrall", "Perfected Thrall", "Skeletal Lancer", "Recurring Nightmare", "Living Graveyard", "Bloody Tendril", "Conglomerate of Limbs"];
+        const pack = game.packs.get("necromancer-thrall-helper.necro-thralls");
+        if (pack) {
+            const index = await pack.getIndex();
+            let folder = game.folders.find(f => f.name === "Necromancer Thralls" && f.type === "Actor");
+            for (const name of requiredActors) {
+                if (!game.actors.find(a => a.name === name)) {
+                    if (!folder) folder = await Folder.create({ name: "Necromancer Thralls", type: "Actor", color: "#4b5563" });
+                    const entry = index.find(a => a.name === name);
+                    if (entry) await game.actors.importFromCompendium(pack, entry._id, { folder: folder.id });
+                }
+            }
         }
     }
+
+    if (!CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped) {
+        const originalApplyDamage = CONFIG.Actor.documentClass.prototype.applyDamage;
+        CONFIG.Actor.documentClass.prototype.applyDamage = async function(options) {
+            const preHp = this.system?.attributes?.hp?.value || 0;
+            const result = await originalApplyDamage.call(this, options);
+            const postHp = this.system?.attributes?.hp?.value || 0;
+            const hpLost = preHp - postHp;
+            if (hpLost > 0) Hooks.callAll("necroHelperDamageApplied", this, options, hpLost);
+            return result;
+        };
+        CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped = true;
+    }
+
+    const aoeApi = game.modules.get("aoe-easy-resolve")?.api;
+    if (!aoeApi) return;
+
+    aoeApi.registerInterceptor("preRenderCard", async (payload) => {
+        const name = payload.itemName || payload.originItem?.name || "";
+        
+        if (name.includes("Calcification")) {
+            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (canvas.tokens.get(tokenId)?.actor?.system?.traits?.value?.includes("skeleton")) targetData.isImmune = true;
+            }
+        }
+        
+        if (name === "Thick Skin" || name.startsWith("Thick Skin")) {
+            payload.itemName = "Thick Skin";
+            payload.hazardDamage = null;
+            const casterAlliance = payload.caster?.system?.details?.alliance || payload.originItem?.actor?.system?.details?.alliance || "party";
+            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
+                const token = canvas.tokens.get(tokenId);
+                if (!token?.actor) continue;
+                const targetAlliance = token.actor.system?.details?.alliance || (token.actor.hasPlayerOwner ? "party" : "opposition");
+                if (targetAlliance === casterAlliance || targetData.isImmune) delete payload.targets[tokenId];
+            }
+        }
+        
+        if (name.includes("Flesh Tsunami")) payload.itemName = "Flesh Tsunami (Greater Difficult Terrain)";
+        if (name.includes("Blossoming Gore Hazard")) { payload.hazardDamage = null; payload.itemName = "Blossoming Gore Hazard <style>.blossoming-gore-hide .roll-damage-btn { display: none !important; }</style><span class='blossoming-gore-hide'></span>"; }
+        if (name.includes("Dread Mosquito")) { payload.hazardDamage = null; payload.itemName = "Dread Mosquito Storm <style>.dms-hide .roll-damage-btn { display: none !important; }</style><span class='dms-hide'></span>"; }
+        
+        if (name.includes("Desperate Revival") || name.includes("Necrotic Bomb") || name.includes("Necrotic Blast") || name.includes("Dread Mosquito")) {
+            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null) || game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName) || game.messages.get(payload.originMessageId);
+            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
+                const token = canvas.tokens.get(tokenId);
+                if (!token?.actor) continue;
+                const currentType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
+                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
+                targetData.isImmune = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
+                targetData.isHealing = false; 
+            }
+        }
+        
+        if (name.includes("Harm")) {
+            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null) || game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName) || game.messages.get(payload.originMessageId);
+            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
+                const token = canvas.tokens.get(tokenId);
+                if (!token?.actor) continue;
+                const currentState = msg?.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
+                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
+                targetData.isHealing = (currentState === "void" && negHeal) || currentState === "heal";
+                targetData.isImmune = (currentState === "vit" && !negHeal);
+            }
+        }
+        return payload;
+    }, 999);
+
+    aoeApi.registerInterceptor("preApplyDamage", async (payload) => {
+        const msg = payload.messageId ? game.messages.get(payload.messageId) : null;
+        const originName = msg?.flags?.["aoe-easy-resolve"]?.itemName || payload.originItem?.name || "";
+        
+        const pushReceipt = (tokenId, token, content, saveNote) => {
+            window.aoeEasyResolveApplying?.receipt.push({ tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content, saveNote });
+        };
+
+        if (originName.includes("Living Graveyard")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos) continue;
+                if (dos === "failure" || dos === "criticalFailure") {
+                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("prone"); } catch (e) {}
+                    pushReceipt(tokenId, token, `<span style="color: #ef4444; font-weight: bold;">Knocked Prone!</span>`, "Violent Shake");
+                } else pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Keeps their footing!</span>`, "Resisted");
+                targetData.hasApplied = true;
+            }
+        }
+        
+        if (originName === "Thick Skin" || originName.startsWith("Thick Skin")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos) continue;
+                let receiptText = `<span style="font-weight: bold; color: #888;">Resists the shockwave.</span>`;
+                if (dos === "failure" || dos === "criticalFailure") {
+                    const existingSickened = token.actor.getCondition?.("sickened") || token.actor.itemTypes?.condition?.find(c => c.slug === "sickened");
+                    if (existingSickened) receiptText = `<span style="color: #ff8c00;">Failed save, but already Sickened ${existingSickened.value || 1}.</span>`;
+                    else {
+                        try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("sickened", { value: 1, max: 1 }); } catch (e) {}
+                        receiptText = `<span style="color: #ff0000; font-weight: bold;">Sickened by the violent muscle ripples! (Sickened 1)</span>`;
+                    }
+                }
+                pushReceipt(tokenId, token, receiptText, "Thick Skin");
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Desperate Revival")) {
+            let totalSiphonedDamage = 0;
+            const caster = payload.originItem?.actor || game.user.character;
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor) continue;
+                if (!dos || dos === "criticalSuccess" || targetData.isImmune) {
+                    pushReceipt(tokenId, token, `<span style="color: #008000; font-weight: bold;">Unaffected by the siphon.</span>`, "Crit Success / Immune");
+                    targetData.hasApplied = true;
+                    continue;
+                }
+                const targetLevel = token.actor.level || 1;
+                const damageAmount = dos === "success" ? Math.max(1, Math.floor(targetLevel / 2)) : dos === "failure" ? Math.max(1, targetLevel) : Math.max(2, targetLevel * 2);
+                const chosenType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
+                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
+                if (DamageRoll && damageAmount > 0) {
+                    const roll = await new DamageRoll(`${damageAmount}[${chosenType}]`).evaluate({async: true});
+                    targetData.hasApplied = true; 
+                    await token.actor.applyDamage({ damage: roll, token: token.document });
+                    totalSiphonedDamage += damageAmount;
+                }
+            }
+            if (caster && totalSiphonedDamage > 0) {
+                const currentHP = caster.system.attributes.hp.value;
+                const maxHP = caster.system.attributes.hp.max;
+                const halfMaxHP = Math.floor(maxHP / 2);
+                const actualHealed = Math.min(halfMaxHP, totalSiphonedDamage, maxHP - currentHP);
+                if (actualHealed > 0) {
+                    await caster.update({ "system.attributes.hp.value": currentHP + actualHealed });
+                    const necroToken = caster.getActiveTokens()[0];
+                    if (necroToken && canvas.ready) canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
+                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: necroToken?.id || caster.id, speaker: { alias: caster.name }, img: necroToken?.document?.texture?.src || caster.img, content: `<span style="color: #4ade80; font-weight: bold;">Siphoned ${totalSiphonedDamage} life force, regaining ${actualHealed} HP (Cap: ${halfMaxHP} HP).</span>`, saveNote: "Siphon Harvest" });
+                }
+            }
+        }
+
+        if (originName.includes("Recurring Nightmare")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos || dos === "criticalSuccess" || dos === "success" || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                const frightenedVal = dos === "criticalFailure" ? 2 : 1;
+                let applied = false;
+                try {
+                    const currentVal = token.actor.getCondition?.("frightened")?.value || 0;
+                    if (currentVal < frightenedVal && typeof token.actor.increaseCondition === "function") {
+                        await token.actor.increaseCondition("frightened", { value: frightenedVal - currentVal });
+                        applied = true;
+                    }
+                } catch (e) {}
+                if (applied) pushReceipt(tokenId, token, `<span style="color: #a855f7; font-weight: bold;">Terrified by the phantasm! (Frightened ${frightenedVal})</span>`, "Recurring Nightmare");
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Blossoming Gore Hazard")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune || !dos || dos === "criticalSuccess") {
+                    if (token?.actor && dos === "criticalSuccess") pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Unaffected!</span>`, "Crit Success");
+                    targetData.hasApplied = true;
+                    continue;
+                }
+                const drainedVal = (dos === "success" || dos === "failure") ? 1 : (dos === "criticalFailure") ? 2 : 0;
+                if (drainedVal > 0) { try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("drained", { value: drainedVal }); } catch (e) {} }
+                const thrallsToSpawn = dos === "failure" ? 1 : dos === "criticalFailure" ? 2 : 0;
+                let receiptContent = `<span style="color: #ff8c00; font-weight: bold;">Drained ${drainedVal}</span>`;
+                if (thrallsToSpawn > 0) receiptContent += `<br><div style="margin-top: 4px;"><button type="button" class="gore-spawn-btn" data-count="${thrallsToSpawn}" data-target-id="${tokenId}" style="background: #220000; color: #ff6b6b; border: 1px solid #ff0000; padding: 2px; font-size: 0.85em; border-radius: 4px; cursor: pointer;"><i class="fas fa-ghost"></i> Sprout ${thrallsToSpawn} Thrall(s)</button></div>`;
+                pushReceipt(tokenId, token, receiptContent, `Blossoming Gore (${dos})`);
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Conglomerate Grab")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                if (dos === "failure" || dos === "criticalFailure") {
+                    const cond = dos === "failure" ? "grabbed" : "restrained";
+                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition(cond); } catch (e) {}
+                    pushReceipt(tokenId, token, `<span style="color: #cc0000; font-weight: bold;">Snared by limbs! (${cond.charAt(0).toUpperCase() + cond.slice(1)})</span>`, "Conglomerate Grab");
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Deathly Scream")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                if (dos === "failure" || dos === "criticalFailure") {
+                    const val = dos === "failure" ? 1 : 2;
+                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("frightened", {value: val}); } catch (e) {}
+                    pushReceipt(tokenId, token, `<span style="color: #00ffff; font-weight: bold;">Terrified! (Frightened ${val})</span>`, "Deathly Scream");
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Dead Weight")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                if (dos && dos !== "criticalSuccess") {
+                    try {
+                        if (typeof token.actor.increaseCondition === "function") {
+                            await token.actor.increaseCondition("off-guard");
+                            if (dos === "failure" || dos === "criticalFailure") await token.actor.increaseCondition("slowed", { value: dos === "failure" ? 1 : 2 });
+                        }
+                    } catch (e) {}
+                    pushReceipt(tokenId, token, `<span style="color: #a855f7; font-weight: bold;">Off-Guard!</span>${(dos === "failure" || dos === "criticalFailure") ? ` <span style="color: #ff0000; font-weight: bold;">(Slowed ${dos === "failure" ? 1 : 2})</span>` : ""}`, "Dead Weight");
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Blood Infusion")) {
+            const spellRank = msg?.flags?.["aoe-easy-resolve"]?.spellRank || 1;
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                if (dos && dos !== "criticalSuccess") {
+                    try {
+                        await token.actor.createEmbeddedDocuments("Item", [{ name: "Infused Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp", system: { description: { value: "Loses immunity to bleed and is considered a creature with blood for 1 minute." }, duration: { value: 1, unit: "minutes", expiry: null }, rules: [{ key: "Immunity", type: "bleed", mode: "remove" }] } }]);
+                        const damageFormula = dos === "success" ? `${spellRank}` : dos === "failure" ? `${spellRank}d6` : `${spellRank * 2}d6`;
+                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("persistent-damage", { value: damageFormula, suboption: "bleed" });
+                        pushReceipt(tokenId, token, `<span style="color: #ff0000; font-weight: bold;">Infused! Bleed Immunity Stripped & takes ${damageFormula} persistent bleed.</span>`, "Blood Infusion");
+                    } catch (e) {}
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Life Tap")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || targetData.isImmune) { targetData.hasApplied = true; continue; }
+                if (dos && dos !== "criticalSuccess") {
+                    const drainedVal = dos === "success" ? 1 : dos === "failure" ? 2 : 3;
+                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("drained", { value: drainedVal }); } catch (e) {}
+                    const hpLost = drainedVal * (token.actor.level || 1);
+                    const healingAmount = hpLost * 2;
+                    const caster = payload.originItem?.actor || game.user.character;
+                    const eligibleAllies = canvas.tokens.placeables.filter(t => t.actor && (t.actor.system?.details?.alliance === "party" || t.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY));
+                    let recipientActor = caster;
+                    
+                    if (eligibleAllies.length > 1) {
+                        await new Promise(resolve => {
+                            new Dialog({
+                                title: "Life Tap: Siphon Recipient",
+                                content: `<p><b>${token.name}</b> lost ${hpLost} maximum HP. Choose who receives <b>${healingAmount} HP</b> of healing:</p><form><select id="heal-recipient">${eligibleAllies.map(t => `<option value="${t.actor.id}">${t.name}</option>`).join("")}</select></form>`,
+                                buttons: { select: { label: "Apply Healing", callback: (html) => { const found = game.actors.get(html.find("#heal-recipient").val()); if (found) recipientActor = found; resolve(); } } },
+                                default: "select"
+                            }).render(true);
+                        });
+                    }
+
+                    if (recipientActor) {
+                        const currentHP = recipientActor.system.attributes.hp.value;
+                        const actualHealed = Math.min(recipientActor.system.attributes.hp.max - currentHP, healingAmount);
+                        await recipientActor.update({ "system.attributes.hp.value": currentHP + actualHealed });
+                        const recipientToken = recipientActor.getActiveTokens()[0];
+                        if (recipientToken && canvas.ready && actualHealed > 0) canvas.interface.createScrollingText(recipientToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
+                        pushReceipt(tokenId, token, `<span style="color: #8a2be2; font-weight: bold;">Drained ${drainedVal} (${hpLost} HP).</span><br><span style="color: #4ade80;">Healed ${recipientActor.name} for ${actualHealed} HP!</span>`, "Life Tap");
+                    }
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Flesh Tsunami")) {
+            const hasLimbs = msg?.getFlag("necromancer-thrall-helper", "limbsActivated");
+            const saveDC = (msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {}).saveDC || 10;
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor) continue;
+                if (!hasLimbs) { pushReceipt(tokenId, token, `<span style="color: #888; font-weight: bold;">Area is Greater Difficult Terrain.</span>`, "Flesh Tsunami"); targetData.hasApplied = true; continue; }
+                if (targetData.isImmune) { pushReceipt(tokenId, token, `<span style="color: #888; font-weight: bold;">Unaffected by limbs (Ally).</span>`, "Immune"); targetData.hasApplied = true; continue; }
+                if (!dos || dos === "criticalSuccess" || dos === "success") { pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Evades the grasping flesh!</span>`, "Flesh Tsunami"); targetData.hasApplied = true; continue; }
+                try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("immobilized"); } catch (e) { }
+                pushReceipt(tokenId, token, `<span style="color: #ef4444; font-weight: bold;">Snared by the gory wave! (Immobilized, Escape DC ${saveDC})</span>`, "Flesh Tsunami");
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Temporary Possession")) {
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos) continue;
+                if (dos === "criticalSuccess") pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Shrugs off the possession completely! Unaffected.</span>`, `Temporary Possession (${dos})`);
+                else {
+                    const actionsAllowed = dos === "success" ? 1 : dos === "failure" ? 2 : 3;
+                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("stunned", { value: 1 }); } catch (e) {}
+                    pushReceipt(tokenId, token, `<div style="text-align: left; font-size: 0.9em; margin-top: 2px;"><span style="color: #ef4444; font-weight: bold; text-transform: uppercase;">Controlled (${dos.replace(/([A-Z])/g, ' $1')})</span><br>• Can spend up to <b>${actionsAllowed} action(s)</b>: <i>Drop Prone, Interact, Release, or Strike</i>.<br>• Strike MAP applies.<br>• Becomes <b>Stunned 1</b> at end of turn.<br><span style="color: #f87171; font-size: 0.85em; font-style: italic;">⚠️ Reflected Damage Warning: If this creature loses HP while possessed or stunned by this, you take half that amount!</span></div>`, `Temporary Possession (${dos})`);
+                }
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Calcification")) {
+            const saveDC = (msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {}).saveDC || 10;
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos) continue;
+                const traits = token.actor.system?.traits?.value || [];
+                const isSkeleton = traits.includes("skeleton") || targetData.isImmune;
+                if (isSkeleton || dos === "criticalSuccess") { pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Unaffected by the bone dust!</span>`, isSkeleton ? "Immune (Skeleton)" : "Crit Success"); targetData.hasApplied = true; continue; }
+                const slowVal = dos === "success" ? 1 : dos === "failure" ? 1 : 2;
+                const weakVal = dos === "success" ? 5 : 10;
+                const titleColor = dos === "success" ? "#eab308" : dos === "failure" ? "#f97316" : "#ef4444";
+                const titleText = dos === "success" ? "Calcifying!" : dos === "failure" ? "Calcifying Heavily!" : "Rapidly Petrifying!";
+                let details = `Slowed ${slowVal}, Weakness ${weakVal} Bludg.${dos !== "success" ? `<br><span style="font-size: 0.9em; font-style: italic; color: #ccc;">End of turn Fort save.</span>` : " (1 rd)"}`;
+                if (traits.includes("incorporeal")) details += `<br><span style="color: #a855f7; font-weight: bold; font-size: 0.95em;">⚠️ Loses Incorporeal Trait!</span>`;
+                try { if (typeof token.actor.increaseCondition === "function") { for (let i = 0; i < slowVal; i++) await token.actor.increaseCondition("slowed"); } } catch (e) { }
+                try {
+                    if (!token.actor.items.find(i => i.system?.slug === "effect-calcification" || i.name === "Effect: Calcification")) {
+                        await token.actor.createEmbeddedDocuments("Item", [{ name: "Effect: Calcification", type: "effect", img: "icons/magic/death/skeleton-skull-soul-blue.webp", system: { slug: "effect-calcification", level: { value: 9 }, duration: { value: dos === "success" ? 1 : -1, unit: dos === "success" ? "rounds" : "unlimited", expiry: "turn-start" }, description: { value: `You are calcifying. Weakness ${weakVal} to bludgeoning.` }, rules: [{ key: "Weakness", type: "bludgeoning", value: weakVal }] }, flags: { "necromancer-thrall-helper": { calcificationDC: saveDC, isCalcifying: true } } }]);
+                    }
+                } catch (e) { }
+                pushReceipt(tokenId, token, `<div style="display: flex; flex-direction: column; align-items: flex-end; text-align: right; width: 100%; line-height: 1.2;"><span style="color: ${titleColor}; font-weight: bold; text-transform: uppercase;">${titleText}</span><div style="font-size: 0.9em; margin-top: 2px;">${details}</div></div>`, `Calcification (${dos})`);
+                targetData.hasApplied = true;
+            }
+        }
+
+        if (originName.includes("Dread Mosquito")) {
+            const saveDC = (msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {}).saveDC || 10;
+            const casterId = payload.originItem?.actor?.id || payload.caster?.id || "";
+            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
+                if (targetData.hasApplied) continue;
+                const token = canvas.tokens.get(tokenId);
+                const dos = targetData.degreeOfSuccess;
+                if (!token?.actor || !dos) continue;
+                if (token.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"))) {
+                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: "" }, img: "icons/magic/water/blood-drop-skull.webp", content: `<div style="text-align: right; padding-right: 5px; font-size: 0.9em;"><i class="fas fa-level-up-alt fa-rotate-90" style="color: #555; margin-right: 4px;"></i> <span style="color: #888; font-weight: bold;">Already Infected!</span></div>`, saveNote: "Infected" });
+                    targetData.hasApplied = true;
+                    continue; 
+                }
+                const chosenType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
+                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
+                const isImmuneToSwarm = (chosenType === 'vitality' && !negHeal) || (chosenType === 'void' && negHeal) || targetData.isImmune;
+                if (dos === "criticalSuccess" || isImmuneToSwarm) {
+                    pushReceipt(tokenId, token, `<span style="color: #4ade80; font-weight: bold;">Evades the plague!</span>`, isImmuneToSwarm ? "Immune" : "Crit Success");
+                    targetData.hasApplied = true;
+                    continue;
+                }
+                const stage = (dos === "criticalFailure") ? 2 : 1;
+                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: "" }, img: "icons/magic/water/blood-drop-skull.webp", content: `<div style="text-align: right; padding-right: 5px; font-size: 0.9em;"><i class="fas fa-level-up-alt fa-rotate-90" style="color: #555; margin-right: 4px;"></i> <span style="color: ${dos === 'success' ? '#eab308' : '#ef4444'}; font-weight: bold;">Plagued! (Stage ${stage})</span></div>`, saveNote: `Stage ${stage}` });
+                let diseaseAttempts = 0;
+                const applyDisease = async () => {
+                    try {
+                        if ((token.actor.getCondition("sickened")?.value || 0) < stage) await token.actor.increaseCondition("sickened");
+                        if (!token.actor.items.some(i => i.system?.slug === "effect-necrotic-blood")) {
+                            await token.actor.createEmbeddedDocuments("Item", [{ name: "Effect: Necrotic Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp", system: { slug: "effect-necrotic-blood", level: { value: 18 }, duration: { value: (dos === "success") ? 1 : 6, unit: "rounds", expiry: "turn-end" }, description: { value: `<b>Necrotic Blood (Stage ${stage})</b><br>Stage 1: 3d10 ${chosenType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${chosenType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${chosenType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>` }, rules: [{ key: "Weakness", type: "bleed", value: stage === 3 ? 20 : stage * 5 }] }, flags: { "necromancer-thrall-helper": { isNecroticBlood: true, masterId: casterId, dmgType: chosenType, necroticBloodDC: saveDC, stage: stage } } }]);
+                        }
+                    } catch(e) { if (diseaseAttempts < 20) { diseaseAttempts++; setTimeout(applyDisease, 100); } else console.error("Necromancer Helper | Disease DB lock timeout:", e); }
+                };
+                applyDisease();
+                targetData.hasApplied = true;
+            }
+        }
+        return payload;
+    }, 999);
 });
 
 
@@ -121,9 +504,6 @@ Hooks.on("preDeleteToken", (tokenDoc, options, userId) => {
         return false;
     }
 });
-
-
-
 Hooks.on("pf2e.restForTheNight", async (actor) => {
     if (actor.getFlag("necromancer-thrall-helper", "consumeThrallUsed")) {
         await actor.unsetFlag("necromancer-thrall-helper", "consumeThrallUsed");
@@ -136,148 +516,18 @@ Hooks.on("pf2e.restForTheNight", async (actor) => {
     }
 });
 
-
-Hooks.on("updateActor", async (actor, changes, options, userId) => {
-    if (!game.user.isGM) return;
-
-    if (actor.getFlag("necromancer-thrall-helper", "revivalPrompted")) return;
-
-    const hpChange = foundry.utils.getProperty(changes, "system.attributes.hp.value");
-
-    const isPuppet = actor.items.find(i => i.getFlag("necromancer-thrall-helper", "isPuppetedCorpse"));
-    if (isPuppet) {
-        const currentHp = hpChange !== undefined ? hpChange : actor.system.attributes.hp.value;
-        const hasSlowed = actor.getCondition("slowed");
-        
-        if (currentHp <= 100 && currentHp > 0 && !hasSlowed) {
-            try { await actor.increaseCondition("slowed"); } catch(e) {}
-        } else if (currentHp > 100 && hasSlowed) {
-            try { await actor.decreaseCondition("slowed"); } catch(e) {}
-        }
-    }
-    const oldHp = actor.system?.attributes?.hp?.value ?? 1;
-    const isDroppingToZero = hpChange !== undefined && hpChange <= 0 && oldHp > 0;
-    if (!isDroppingToZero) return;
-
-    const hasDesperateRevival = actor.items.some(i => 
-        i.name === "Desperate Revival" || 
-        i.slug === "desperate-revival"
-    );
-    if (!hasDesperateRevival) return;
-
-    const usedToday = actor.getFlag("necromancer-thrall-helper", "desperateRevivalUsed");
-    if (usedToday) return;
-
-    const necroTokens = actor.getActiveTokens();
-    if (necroTokens.length === 0) return;
-
-    await actor.setFlag("necromancer-thrall-helper", "revivalPrompted", true);
-    setTimeout(() => { actor.unsetFlag("necromancer-thrall-helper", "revivalPrompted"); }, 10000);
-
-    await ChatMessage.create({
-        speaker: ChatMessage.getSpeaker({ actor: actor }),
-        flavor: `<strong>Desperate Revival Triggered!</strong>`,
-        content: `
-            <div style="background: rgba(0,0,0,0.35); padding: 10px; border-radius: 4px; border-left: 4px solid #ef4444;">
-                <p style="margin: 0 0 6px 0;"><b>${actor.name}</b> is on the verge of death!</p>
-                <p style="margin: 0 0 8px 0; font-size: 0.95em;">Spend your reaction to avoid being knocked out, remain at 1 HP, and unleash a <b>60-foot life-draining emanation</b>?</p>
-                <div style="text-align: center;">
-                    <button type="button" class="desperate-revival-trigger-btn" data-necro-id="${actor.id}" style="background: #450a0a; color: #f87171; border: 1px solid #ef4444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;">
-                        <i class="fas fa-heartbeat"></i> Trigger Desperate Revival (1/Day)
-                    </button>
-                </div>
-            </div>
-        `
-    });
-});
-
-Hooks.on("createChatMessage", async (message) => {
-    if (!game.user.isGM) return;
-
-    const pf2eContext = message.flags?.pf2e?.context;
-    if (pf2eContext?.type !== "attack-roll") return;
-
-  
-    const attackerToken = canvas.tokens.get(message.speaker?.token) 
-        || canvas.tokens.placeables.find(t => t.actor?.id === message.speaker?.actor);
-    if (!attackerToken?.actor) return;
-
-    const alliance = attackerToken.actor.system?.details?.alliance || attackerToken.actor.alliance;
-    const isEnemy = alliance === "opposition" || attackerToken.document.disposition === CONST.TOKEN_DISPOSITIONS.HOSTILE;
-    if (!isEnemy) return;
-
-    const gridDist = canvas.scene?.grid?.distance || 5;
-    const lancers = canvas.tokens.placeables.filter(t => {
-        if (!t.actor || t.actor.system?.attributes?.hp?.value <= 0) return false;
-        return t.document.getFlag("necromancer-thrall-helper", "isSkeletalLancer");
-    });
-
-    if (lancers.length === 0) return;
-
-    const isWithinLancerReach = lancers.some(lancer => {
-        if (typeof lancer.distanceTo === "function") {
-            return lancer.distanceTo(attackerToken) <= 10;
-        }
-        const dx = Math.abs(lancer.center.x - attackerToken.center.x);
-        const dy = Math.abs(lancer.center.y - attackerToken.center.y);
-        return ((Math.max(dx, dy) / canvas.grid.size) * gridDist) <= 10;
-    });
-
-    if (!isWithinLancerReach) return;
-
-
-    const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-    if (!DamageRoll) return;
-
-    const roll = await new DamageRoll("5[piercing]").evaluate();
-    await roll.toMessage({
-        speaker: ChatMessage.getSpeaker({ token: attackerToken.document }),
-        flavor: `<strong>Skeletal Lancer: Spear Threat!</strong><br><b>${attackerToken.name}</b> made a Strike within reach of a Skeletal Lancer!`
-    });
-
-    await attackerToken.actor.applyDamage({ damage: roll, token: attackerToken.document });
-
-    if (canvas.ready) {
-        canvas.interface.createScrollingText(attackerToken.center, "-5 HP", {
-            anchor: CONST.TEXT_ANCHOR_POINTS.TOP,
-            fill: 0xff0000,
-            direction: CONST.TEXT_ANCHOR_POINTS.DOWN
-        });
-    }
-});
-
-
-
-
-
-
-
-
-
-
-
-Hooks.on("renderChatMessageHTML", (message, html) => {
-    const aoeData = message.flags?.["aoe-easy-resolve"];
-    if (aoeData?.itemName === "Thick Skin" || aoeData?.itemName === "Recurring Nightmare") {
-        const $html = html instanceof jQuery ? html : $(html);
-        $html.find(".roll-damage-btn").remove();
-    }
-});
 Hooks.on("deleteItem", async (itemDoc, options, userId) => {
-    if (game.user.id !== userId) return;
-    if (itemDoc.type !== "effect" || !itemDoc.getFlag("necromancer-thrall-helper", "isHazardTracker")) return;
+    if (game.user.id !== userId || itemDoc.type !== "effect" || !itemDoc.getFlag("necromancer-thrall-helper", "isHazardTracker")) return;
 
     const hazardId = itemDoc.getFlag("necromancer-thrall-helper", "hazardId");
-    const sceneId = itemDoc.getFlag("necromancer-thrall-helper", "sceneId");
-    
-    const targetScene = game.scenes.get(sceneId);
+    const targetScene = game.scenes.get(itemDoc.getFlag("necromancer-thrall-helper", "sceneId"));
     if (!targetScene) return;
 
     const rIds = targetScene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "hazardId") === hazardId || r.getFlag("necromancer-thrall-helper", "goreRegionId") === hazardId).map(r => r.id);
     const dIds = targetScene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "hazardId") === hazardId || d.getFlag("necromancer-thrall-helper", "goreRegionId") === hazardId).map(d => d.id);
     
     if (rIds.length > 0 || dIds.length > 0) {
-        globalThis.NecroThrallHelper.purgeGraphics(sceneId, { regionIds: rIds, drawingIds: dIds });
+        globalThis.NecroThrallHelper.purgeGraphics(targetScene.id, { regionIds: rIds, drawingIds: dIds });
     }
 });
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
@@ -370,13 +620,6 @@ if (hasFleshFascination) {
         `
     });
 }
-
-
-
-
-
-
-
 
     const hasReinforced = masterActor.items.some(i => 
         /reinforced\s*skeleton/i.test(i.name) || i.slug === "reinforced-skeleton"
@@ -512,312 +755,298 @@ if (hasFleshFascination) {
         }, 500);
     }
 })
+Hooks.on("createChatMessage", async (message) => {
+    if (message.author?.id !== game.user.id) return;
 
+    const pf2eContext = message.flags?.pf2e?.context;
+    if (!pf2eContext) return;
+
+    // --- SKELETAL LANCER REACTION ---
+    if (pf2eContext.type === "attack-roll") {
+        if (!game.user.isGM) return; 
+
+        const attackerToken = canvas.tokens.get(message.speaker?.token) || canvas.tokens.placeables.find(t => t.actor?.id === message.speaker?.actor);
+        if (!attackerToken?.actor) return;
+
+        const alliance = attackerToken.actor.system?.details?.alliance || attackerToken.actor.alliance;
+        if (alliance !== "opposition" && attackerToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.HOSTILE) return;
+
+        const gridDist = canvas.scene?.grid?.distance || 5;
+        const lancers = canvas.tokens.placeables.filter(t => t.actor?.system?.attributes?.hp?.value > 0 && t.document.getFlag("necromancer-thrall-helper", "isSkeletalLancer"));
+        
+        if (lancers.length === 0) return;
+
+        const isWithinReach = lancers.some(lancer => {
+            if (typeof lancer.distanceTo === "function") return lancer.distanceTo(attackerToken) <= 10;
+            return ((Math.max(Math.abs(lancer.center.x - attackerToken.center.x), Math.abs(lancer.center.y - attackerToken.center.y)) / canvas.grid.size) * gridDist) <= 10;
+        });
+
+        if (!isWithinReach) return;
+
+        const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
+        if (!DamageRoll) return;
+
+        const roll = await new DamageRoll("5[piercing]").evaluate();
+        await roll.toMessage({
+            speaker: ChatMessage.getSpeaker({ token: attackerToken.document }),
+            flavor: `<strong>Skeletal Lancer: Spear Threat!</strong><br><b>${attackerToken.name}</b> made a Strike within reach of a Skeletal Lancer!`
+        });
+
+        await attackerToken.actor.applyDamage({ damage: roll, token: attackerToken.document });
+
+        if (canvas.ready) {
+            canvas.interface.createScrollingText(attackerToken.center, "-5 HP", { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0xff0000, direction: CONST.TEXT_ANCHOR_POINTS.DOWN });
+        }
+    }
+
+    // --- DRAINING STRIKE REACTION ---
+    if (pf2eContext.type === "damage-roll") {
+        const rollOptions = pf2eContext.options || [];
+        if (!rollOptions.some(o => o === "draining-strike" || o.startsWith("draining-strike:"))) return;
+
+        const actor = game.actors.get(message.speaker?.actor);
+        if (!actor) return;
+
+        const dsFeat = actor.items.find(i => i.slug === "draining-strike" || i.name === "Draining Strike");
+        const requiredThralls = dsFeat ? parseInt(dsFeat.flags?.pf2e?.rulesSelections?.drainingStrike || dsFeat.flags?.pf2e?.rulesSelections?.["draining-strike"] || 1, 10) : 1;
+
+        let rawSpiritDamage = 0;
+        if (message.rolls?.length > 0 && message.rolls[0].instances) {
+            message.rolls[0].instances.forEach(inst => { if (inst.type === "spirit") rawSpiritDamage += (inst.total ?? inst._total ?? 0); });
+        }
+        if (rawSpiritDamage === 0) return;
+
+        let targetToken = canvas.tokens.get(pf2eContext.target?.token) || (game.user.targets.size > 0 ? Array.from(game.user.targets)[0] : null);
+        let spiritHeal = rawSpiritDamage;
+
+        if (targetToken?.actor) {
+            const attrs = targetToken.actor.system.attributes;
+            if ((attrs.immunities || []).some(i => i.type === "spirit" || i.type === "all-damage")) {
+                spiritHeal = 0;
+            } else {
+                const weakness = (attrs.weaknesses || []).find(w => w.type === "spirit" || w.type === "all-damage")?.value || 0;
+                const resistance = (attrs.resistances || []).find(r => r.type === "spirit" || r.type === "all-damage")?.value || 0;
+                spiritHeal = Math.max(0, spiritHeal + weakness - resistance);
+            }
+        }
+
+        if (spiritHeal === 0) return ui.notifications.info("Draining Strike hit, but the target resisted all Spirit damage. No healing granted.");
+
+        const necroToken = canvas.tokens.get(message.speaker?.token) || actor.getActiveTokens()[0];
+        const gridDist = canvas.scene?.grid?.distance || 5;
+
+        const availableThralls = canvas.tokens.placeables.filter(t => {
+            if (t.document.getFlag("necromancer-thrall-helper", "masterId") !== actor.id) return false;
+            
+            const distToNecro = necroToken ? (Math.max(Math.abs(necroToken.x - t.x), Math.abs(necroToken.y - t.y)) / canvas.grid.size) * gridDist : 999;
+            const distToTarget = targetToken ? (Math.max(Math.abs(targetToken.x - t.x), Math.abs(targetToken.y - t.y)) / canvas.grid.size) * gridDist : 999;
+            
+            return distToNecro <= 10 || distToTarget <= 10;
+        });
+
+        if (availableThralls.length < requiredThralls) {
+            return ui.notifications.error(`Draining Strike requires ${requiredThralls} thrall(s) within 10ft of you or the target, but only found ${availableThralls.length}.`);
+        }
+
+        const checkboxes = availableThralls.map((t, index) => `
+            <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                <input type="checkbox" id="drain-thrall-${index}" value="${t.id}" class="drain-checkbox" style="margin-right: 10px;">
+                <label for="drain-thrall-${index}" style="display: flex; align-items: center; cursor: pointer;">
+                    <img src="${t.document.texture?.src || "icons/svg/mystery-man.svg"}" width="30" height="30" style="border: none; margin-right: 10px; border-radius: 4px; object-fit: cover;">
+                    ${t.name}
+                </label>
+            </div>
+        `).join("");
+
+        new Dialog({
+            title: "Draining Strike",
+            content: `<form id="drain-form" style="margin-bottom: 10px;"><p>Select <b>${requiredThralls}</b> thrall(s) to destroy to siphon their essence.</p><div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80; margin-bottom: 10px;"><p style="margin: 0; font-size: 0.9em;">Raw Spirit Damage: <b>${rawSpiritDamage}</b></p><p style="margin: 0; font-size: 0.9em;">Post-Mitigation Healing: <b>${spiritHeal} HP</b></p></div><div style="max-height: 200px; overflow-y: auto; border: 1px solid #333; padding: 5px; background: rgba(0,0,0,0.2); border-radius: 4px;">${checkboxes}</div></form>`,
+            buttons: {
+                drain: { icon: '<i class="fas fa-heart-broken"></i>', label: "Drain", callback: async (dialogHtml) => {
+                    const selectedIds = [];
+                    dialogHtml.find('.drain-checkbox:checked').each((i, cb) => selectedIds.push(cb.value));
+
+                    if (selectedIds.length !== requiredThralls) return ui.notifications.warn(`You must select exactly ${requiredThralls} thrall(s). Action aborted.`);
+
+                    const tokensToDelete = selectedIds.map(id => canvas.tokens.get(id));
+                    const names = tokensToDelete.map(t => t.name).join(", ");
+                    for (const t of tokensToDelete) await t.document.delete();
+
+                    const currentHP = actor.system.attributes.hp.value;
+                    const actualHealed = Math.min(actor.system.attributes.hp.max - currentHP, spiritHeal);
+                    await actor.update({ "system.attributes.hp.value": currentHP + actualHealed });
+
+                    if (actualHealed > 0 && canvas.ready && necroToken) {
+                        canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
+                    }
+
+                    await ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ actor: actor }),
+                        flavor: `<strong>Draining Strike</strong>`,
+                        content: `<p><b>${actor.name}</b> destroys <b>${names}</b>, funneling their stolen vitality to recover <b>${actualHealed} HP</b>!</p>`
+                    });
+                }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+            }, default: "drain",
+            render: (dialogHtml) => {
+                dialogHtml.find('.drain-checkbox').on('change', function() {
+                    if (dialogHtml.find('.drain-checkbox:checked').length > requiredThralls) {
+                        this.checked = false;
+                        ui.notifications.warn(`You only need to sacrifice ${requiredThralls} thrall(s).`);
+                    }
+                });
+            }
+        }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
+    }
+});
 Hooks.on("createItem", async (item, options, userId) => {
-    if (game.user.id !== userId) return;
-    if (item.type !== "condition") return;
-
+    if (game.user.id !== userId || item.type !== "condition" || !item.parent || item.parent.type !== "character") return;
     const actor = item.parent;
-    if (!actor || actor.type !== "character") return;
-
-    const hasFinalUnion = actor.items.some(i => i.name === "Final Union" || i.slug === "final-union");
-    if (!hasFinalUnion) return;
+    if (!actor.items.some(i => i.name === "Final Union" || i.slug === "final-union")) return;
 
     const slug = item.system.slug;
-
     if (slug === "unconscious" || slug === "prone") {
-        setTimeout(async () => {
-            const badCond = actor.items.find(i => i.id === item.id);
-            if (badCond) await badCond.delete();
-        }, 50);
+        setTimeout(async () => { await actor.items.find(i => i.id === item.id)?.delete(); }, 50);
         return;
     }
 
-    if (slug === "dying") {
-        const isAlreadyPuppet = actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isPuppetedCorpse"));
-        if (isAlreadyPuppet) return; 
-
+    if (slug === "dying" && !actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isPuppetedCorpse"))) {
         setTimeout(async () => {
-
             const badConditions = actor.items.filter(i => i.type === "condition" && ["dying", "wounded", "doomed", "unconscious", "prone"].includes(i.system.slug));
-            if (badConditions.length > 0) {
-                await actor.deleteEmbeddedDocuments("Item", badConditions.map(i => i.id));
-            }
+            if (badConditions.length > 0) await actor.deleteEmbeddedDocuments("Item", badConditions.map(i => i.id));
 
-            const currentMaxHP = actor.system.attributes.hp.max;
-            const hpDelta = 200 - currentMaxHP;
-
-            const puppetEffect = {
-                name: "Effect: Puppeted Corpse",
-                type: "effect",
-                img: "icons/magic/death/icons/magic/death/skeleton-skull-soul-blue.webp",
+            await actor.createEmbeddedDocuments("Item", [{
+                name: "Effect: Puppeted Corpse", type: "effect", img: "icons/magic/death/skeleton-skull-soul-blue.webp",
                 system: {
                     duration: { value: 1, unit: "minutes", expiry: "turn-start" },
                     description: { value: "Your heroic spirit puppets your corpse. You are an undead object. Immune to bleed, death effects, disease, healing, nonlethal, poison, void, doomed, drained, fatigued, sickened, and unconscious. Broken Threshold 100 (Slowed 1)." },
                     rules: [
-                        { key: "FlatModifier", selector: "hp", value: hpDelta, type: "untyped" },
-                        { key: "Immunity", type: "bleed" },
-                        { key: "Immunity", type: "death-effects" },
-                        { key: "Immunity", type: "disease" },
-                        { key: "Immunity", type: "healing" },
-                        { key: "Immunity", type: "nonlethal-attacks" },
-                        { key: "Immunity", type: "poison" },
-                        { key: "Immunity", type: "void" },
-                        { key: "Immunity", type: "doomed" },
-                        { key: "Immunity", type: "drained" },
-                        { key: "Immunity", type: "fatigued" },
-                        { key: "Immunity", type: "sickened" },
-                        { key: "Immunity", type: "unconscious" },
-                        { key: "Immunity", type: "prone" }
+                        { key: "FlatModifier", selector: "hp", value: 200 - actor.system.attributes.hp.max, type: "untyped" },
+                        { key: "Immunity", type: "bleed" }, { key: "Immunity", type: "death-effects" }, { key: "Immunity", type: "disease" }, { key: "Immunity", type: "healing" }, { key: "Immunity", type: "nonlethal-attacks" }, { key: "Immunity", type: "poison" }, { key: "Immunity", type: "void" }, { key: "Immunity", type: "doomed" }, { key: "Immunity", type: "drained" }, { key: "Immunity", type: "fatigued" }, { key: "Immunity", type: "sickened" }, { key: "Immunity", type: "unconscious" }, { key: "Immunity", type: "prone" }
                     ]
                 },
-                flags: {
-                    "necromancer-thrall-helper": { isPuppetedCorpse: true }
+                flags: { "necromancer-thrall-helper": { isPuppetedCorpse: true } }
+            }]);
+
+            let attempts = 0;
+            const resolvePuppetHP = async () => {
+                if (actor.system.attributes.hp.max >= 200) {
+                    await actor.update({ "system.attributes.hp.value": 200 });
+                    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: actor }), flavor: `<strong>Final Union: Puppeted Corpse</strong>`, content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;"><p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has fallen, but the heroic spirit refuses to abandon the body!</p><p style="margin: 0; font-size: 0.95em;">The corpse rises as an undead object with <b>200 HP</b> (Broken Threshold 100).</p></div>` });
+                } else if (attempts < 20) {
+                    attempts++;
+                    setTimeout(resolvePuppetHP, 100);
                 }
             };
-
-            await actor.createEmbeddedDocuments("Item", [puppetEffect]);
-
-            for (let attempts = 0; attempts < 20; attempts++) {
-                if (actor.system.attributes.hp.max >= 200) break;
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-
-            await actor.update({ "system.attributes.hp.value": 200 });
-            
-            await ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                flavor: `<strong>Final Union: Puppeted Corpse</strong>`,
-                content: `
-                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;">
-                        <p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has fallen, but the heroic spirit refuses to abandon the body!</p>
-                        <p style="margin: 0; font-size: 0.95em;">The corpse rises as an undead object with <b>200 HP</b> (Broken Threshold 100).</p>
-                    </div>
-                `
-            });
-
+            resolvePuppetHP();
         }, 50);
     }
 });
 
-Hooks.on("updateActor", async (actor, changes, options, userId) => {
+Hooks.on("updateActor", async (actor, changes) => {
     if (!game.user.isGM) return;
 
     const hpChange = foundry.utils.getProperty(changes, "system.attributes.hp.value");
     if (hpChange === undefined) return;
 
-    if (hpChange > 0) return;
+    const currentHp = hpChange;
 
-    
-    const isReanimated = actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe"));
-    if (isReanimated) {
-        const tokenToKill = actor.getActiveTokens()[0] || canvas.tokens.placeables.find(t => t.actor?.id === actor.id);
-        if (tokenToKill) {
-            await tokenToKill.document.delete();
-            await ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                flavor: `<strong>Reanimated Foe Destroyed</strong>`,
-                content: `<p>The unstable magic holding <b>${actor.name}</b> together violently collapses. It crumbles to dust!</p>`
-            });
-        }
-        return; 
+    if (actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isPuppetedCorpse"))) {
+        const hasSlowed = actor.getCondition("slowed");
+        if (currentHp <= 100 && currentHp > 0 && !hasSlowed) actor.increaseCondition("slowed").catch(()=>{});
+        else if (currentHp > 100 && hasSlowed) actor.decreaseCondition("slowed").catch(()=>{});
     }
 
+    if (currentHp > 0) return;
 
+    const deadToken = actor.getActiveTokens()[0] || canvas.tokens.placeables.find(t => t.actor?.id === actor.id);
+    if (!deadToken) return;
+
+    if (actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe"))) {
+        await deadToken.document.delete();
+        return ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor }),
+            flavor: `<strong>Reanimated Foe Destroyed</strong>`,
+            content: `<p>The unstable magic holding <b>${actor.name}</b> together violently collapses. It crumbles to dust!</p>`
+        });
+    }
+
+    // --- 3. DESPERATE REVIVAL ---
+    const hasDesperateRevival = actor.items.some(i => i.name === "Desperate Revival" || i.slug === "desperate-revival");
+    if (hasDesperateRevival && !actor.getFlag("necromancer-thrall-helper", "desperateRevivalUsed") && !actor.getFlag("necromancer-thrall-helper", "revivalPrompted")) {
+        await actor.setFlag("necromancer-thrall-helper", "revivalPrompted", true);
+        setTimeout(() => actor.unsetFlag("necromancer-thrall-helper", "revivalPrompted"), 10000);
+        return ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor }),
+            flavor: `<strong>Desperate Revival Triggered!</strong>`,
+            content: `<div style="background: rgba(0,0,0,0.35); padding: 10px; border-radius: 4px; border-left: 4px solid #ef4444;"><p style="margin: 0 0 6px 0;"><b>${actor.name}</b> is on the verge of death!</p><p style="margin: 0 0 8px 0; font-size: 0.95em;">Spend your reaction to avoid being knocked out, remain at 1 HP, and unleash a <b>60-foot life-draining emanation</b>?</p><div style="text-align: center;"><button type="button" class="desperate-revival-trigger-btn" data-necro-id="${actor.id}" style="background: #450a0a; color: #f87171; border: 1px solid #ef4444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;"><i class="fas fa-heartbeat"></i> Trigger Desperate Revival (1/Day)</button></div></div>`
+        });
+    }
+
+    // --- 4. NECROTIC BLOOD / MOSQUITO STORM GENERATION ---
     const hasNecroticBlood = actor.items.find(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood") || i.name === "Necrotic Blood");
-    
-    let inStorm = false;
     let stormMasterId = null;
     
     if (!hasNecroticBlood && canvas.scene) {
-        const deadToken = canvas.tokens.placeables.find(t => t.actor?.id === actor.id);
-        if (deadToken) {
-            const storms = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "stormRegionId"));
-            for (const storm of storms) {
-                const shape = storm.shapes?.[0];
-                if (!shape) continue;
-                
-                const cx = shape.x;
-                const cy = shape.y;
-                const rx = shape.radiusX;
-                
-                const dx = deadToken.center.x - cx;
-                const dy = deadToken.center.y - cy;
-                
-
-                if (Math.sqrt(dx*dx + dy*dy) <= rx) {
-                    inStorm = true;
-                    stormMasterId = game.actors.find(a => a.items.some(i => i.name === "Dread Mosquito Storm"))?.id;
-                    break;
-                }
+        for (const storm of canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "stormRegionId"))) {
+            const s = storm.shapes?.[0];
+            if (s && Math.hypot(deadToken.center.x - s.x, deadToken.center.y - s.y) <= s.radiusX) {
+                stormMasterId = game.actors.find(a => a.items.some(i => i.name === "Dread Mosquito Storm"))?.id;
+                break;
             }
         }
     }
 
-    if (hasNecroticBlood || inStorm) {
-        const masterId = hasNecroticBlood ? hasNecroticBlood.getFlag("necromancer-thrall-helper", "masterId") : stormMasterId;
-        const masterActor = game.actors.get(masterId);
-        
-        if (masterActor) {
-            if (hasNecroticBlood) await hasNecroticBlood.delete();
-            const size = actor.system?.traits?.size?.value || "med";
-            const deadTokenId = canvas.tokens.placeables.find(t => t.actor?.id === actor.id)?.id;
-            
-            let sizeLabel = "Medium";
-            if (size === "sm") sizeLabel = "Small";
-            if (size === "lg") sizeLabel = "Large";
-            if (size === "huge") sizeLabel = "Huge";
-            if (size === "grg") sizeLabel = "Gargantuan";
-
-            await ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: masterActor }),
-                flavor: `<strong>Necrotic Blood Trigger!</strong>`,
-                content: `
-                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #880000;">
-                        <p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has succumbed to the necrotic plague!</p>
-                        <p style="margin: 0; font-size: 0.9em;">The infected blood congeals into a new thrall.</p>
-                        <div style="text-align: center; margin-top: 8px;">
-                            <button type="button" class="inevitable-return-btn" data-necro-id="${masterActor.id}" data-target-id="${deadTokenId}" data-size="${size}" style="background: #220033; color: #c084fc; border: 1px solid #7c3aed; padding: 5px 8px; border-radius: 4px; cursor: pointer;">
-                                <i class="fas fa-ghost"></i> Sprout Thrall (${sizeLabel})
-                            </button>
-                        </div>
-                    </div>
-                `
-            });
-        }
-    }
-
-
-    const isDesperatePrompted = actor.getFlag("necromancer-thrall-helper", "revivalPrompted");
-    const hasDesperateRevival = actor.items.some(i => i.name === "Desperate Revival" || i.slug === "desperate-revival");
-    const usedToday = actor.getFlag("necromancer-thrall-helper", "desperateRevivalUsed");
+    const plagueMasterId = hasNecroticBlood ? hasNecroticBlood.getFlag("necromancer-thrall-helper", "masterId") : stormMasterId;
+    const plagueMaster = game.actors.get(plagueMasterId);
     
-    if (hasDesperateRevival && !usedToday && !isDesperatePrompted) {
-        const necroTokens = actor.getActiveTokens();
-        if (necroTokens.length > 0) {
-            await actor.setFlag("necromancer-thrall-helper", "revivalPrompted", true);
-            setTimeout(() => { actor.unsetFlag("necromancer-thrall-helper", "revivalPrompted"); }, 10000);
-
-            await ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                flavor: `<strong>Desperate Revival Triggered!</strong>`,
-                content: `
-                    <div style="background: rgba(0,0,0,0.35); padding: 10px; border-radius: 4px; border-left: 4px solid #ef4444;">
-                        <p style="margin: 0 0 6px 0;"><b>${actor.name}</b> is on the verge of death!</p>
-                        <p style="margin: 0 0 8px 0; font-size: 0.95em;">Spend your reaction to avoid being knocked out, remain at 1 HP, and unleash a <b>60-foot life-draining emanation</b>?</p>
-                        <div style="text-align: center;">
-                            <button type="button" class="desperate-revival-trigger-btn" data-necro-id="${actor.id}" style="background: #450a0a; color: #f87171; border: 1px solid #ef4444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;">
-                                <i class="fas fa-heartbeat"></i> Trigger Desperate Revival (1/Day)
-                            </button>
-                        </div>
-                    </div>
-                `
-            });
-            return; 
-        }
+    if (plagueMaster) {
+        if (hasNecroticBlood) await hasNecroticBlood.delete();
+        const size = actor.system?.traits?.size?.value || "med";
+        const sizeLabel = { sm: "Small", lg: "Large", huge: "Huge", grg: "Gargantuan" }[size] || "Medium";
+        await ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor: plagueMaster }),
+            flavor: `<strong>Necrotic Blood Trigger!</strong>`,
+            content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #880000;"><p style="margin: 0 0 4px 0;"><b>${actor.name}</b> has succumbed to the necrotic plague!</p><p style="margin: 0; font-size: 0.9em;">The infected blood congeals into a new thrall.</p><div style="text-align: center; margin-top: 8px;"><button type="button" class="inevitable-return-btn" data-necro-id="${plagueMaster.id}" data-target-id="${deadToken.id}" data-size="${size}" style="background: #220033; color: #c084fc; border: 1px solid #7c3aed; padding: 5px 8px; border-radius: 4px; cursor: pointer;"><i class="fas fa-ghost"></i> Sprout Thrall (${sizeLabel})</button></div></div>`
+        });
     }
 
-    const isPartyOrPC = actor.hasPlayerOwner || actor.type === "character" || actor.system?.details?.alliance === "party";
-    if (isPartyOrPC) return; 
+    // --- 5. STANDARD DEATH REACTIONS ---
+    if (actor.system?.details?.alliance === "party") return; // Keep allies out of the harvest
 
-    const deadToken = canvas.tokens.placeables.find(t => t.actor?.id === actor.id);
-    if (!deadToken) return;
-
-    const traits = Array.from(actor.system?.traits?.value ?? []);
+    const traits = Array.from(actor.system?.traits?.value || []);
     const size = actor.system?.traits?.size?.value || actor.size || "med";
-            const isCorpseValidSize = size === "sm" || size === "med";
+    const isValidSize = size === "sm" || size === "med";
+    const isUndead = traits.some(t => typeof t === "string" && t.toLowerCase() === "undead");
+    const hasBlood = !traits.includes("construct") && !traits.includes("elemental") && (!isUndead || actor.items.some(i => i.name === "Infused Blood" || i.slug === "infused-blood"));
 
-            const isUndead = traits.includes("undead") || traits.some(t => typeof t === "string" && t.toLowerCase() === "undead");
-            const isConstruct = traits.includes("construct");
-            const isElemental = traits.includes("elemental");
-            const hasInfusedBlood = actor.items.some(i => i.name === "Infused Blood" || i.slug === "infused-blood");
-            const hasBlood = !isConstruct && !isElemental && (!isUndead || hasInfusedBlood);
+    const necromancers = canvas.tokens.placeables.filter(t => t.actor && t.actor.items.some(i => i.slug === "inevitable-return" || i.name === "Inevitable Return" || i.slug === "blood-pool" || i.name === "Blood Pool"));
 
-            const necromancers = canvas.tokens.placeables.filter(t => {
-                if (!t.actor) return false;
-                return t.actor.items.some(i => 
-                    i.name === "Inevitable Return" || i.slug === "inevitable-return" ||
-                    i.name === "Blood Pool" || i.slug === "blood-pool"
-                );
-            });
-
-    for (const necroToken of necromancers) {
-        const necroActor = necroToken.actor;
-        let dist = 999;
-        if (typeof necroToken.distanceTo === "function") {
-            dist = necroToken.distanceTo(deadToken);
-        } else {
-            const dx = Math.abs(necroToken.center.x - deadToken.center.x);
-            const dy = Math.abs(necroToken.center.y - deadToken.center.y);
-            dist = (Math.max(dx, dy) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
-        }
-
+    for (const necro of necromancers) {
+        const dist = typeof necro.distanceTo === "function" 
+            ? necro.distanceTo(deadToken) 
+            : (Math.max(Math.abs(necro.center.x - deadToken.center.x), Math.abs(necro.center.y - deadToken.center.y)) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
+        
         if (dist > 30) continue;
 
-        const hasInevitableFeat = necroActor.items.some(i => i.name === "Inevitable Return" || i.slug === "inevitable-return");
-        const hasBloodPoolFeat = necroActor.items.some(i => i.name === "Blood Pool" || i.slug === "blood-pool");
+        const nActor = necro.actor;
+        const canReturn = isValidSize && nActor.items.some(i => i.slug === "inevitable-return" || i.name === "Inevitable Return");
+        const canBlood = hasBlood && nActor.items.some(i => i.slug === "blood-pool" || i.name === "Blood Pool");
 
-        const canInevitableReturn = hasInevitableFeat && isCorpseValidSize;
-        const canBloodPool = hasBloodPoolFeat && hasBlood;
+        if (!canReturn && !canBlood) continue;
 
-        if (!canInevitableReturn && !canBloodPool) continue;
-
-        const necroLevel = necroActor.level || 1;
-        let reactionOptionsHtml = `<div class="death-reaction-actions" style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px;">`;
-
-        if (canInevitableReturn) {
-            reactionOptionsHtml += `
-                <button type="button" class="inevitable-return-btn" data-necro-id="${necroActor.id}" data-target-id="${deadToken.id}" data-size="${size}" style="background: #220033; color: #c084fc; border: 1px solid #7c3aed; padding: 5px 8px; border-radius: 4px; cursor: pointer; flex: 1; min-width: 130px;">
-                    <i class="fas fa-skull"></i> Claim Corpse (${size === 'sm' ? 'Small' : 'Medium'})
-                </button>
-            `;
-        }
-
-        if (canBloodPool) {
-            reactionOptionsHtml += `
-                <button type="button" class="blood-pool-spawn-btn" data-necro-id="${necroActor.id}" data-target-id="${deadToken.id}" style="background: #3a0000; color: #f87171; border: 1px solid #b91c1c; padding: 5px 8px; border-radius: 4px; cursor: pointer; flex: 1; min-width: 130px;">
-                    <i class="fas fa-tint"></i> Blood Pool (${necroLevel} HP)
-                </button>
-            `;
-        }
-
-        reactionOptionsHtml += `</div>`;
+        let btns = `<div class="death-reaction-actions" style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px;">`;
+        if (canReturn) btns += `<button type="button" class="inevitable-return-btn" data-necro-id="${nActor.id}" data-target-id="${deadToken.id}" data-size="${size}" style="background: #220033; color: #c084fc; border: 1px solid #7c3aed; padding: 5px 8px; border-radius: 4px; cursor: pointer; flex: 1; min-width: 130px;"><i class="fas fa-skull"></i> Claim Corpse (${size === 'sm' ? 'Small' : 'Medium'})</button>`;
+        if (canBlood) btns += `<button type="button" class="blood-pool-spawn-btn" data-necro-id="${nActor.id}" data-target-id="${deadToken.id}" style="background: #3a0000; color: #f87171; border: 1px solid #b91c1c; padding: 5px 8px; border-radius: 4px; cursor: pointer; flex: 1; min-width: 130px;"><i class="fas fa-tint"></i> Blood Pool (${nActor.level || 1} HP)</button>`;
+        btns += `</div>`;
 
         await ChatMessage.create({
-            speaker: ChatMessage.getSpeaker({ actor: necroActor }),
+            speaker: ChatMessage.getSpeaker({ actor: nActor }),
             flavor: `<strong>Death Reaction Triggered!</strong>`,
-            content: `
-                <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #a855f7;">
-                    <p style="margin: 0 0 4px 0;"><b>${deadToken.name}</b> has fallen within 30 feet of <b>${necroToken.name}</b>.</p>
-                    <p style="margin: 0; font-size: 0.9em; color: #ccc;">Choose a reaction to harvest the death:</p>
-                    ${reactionOptionsHtml}
-                </div>
-            `
+            content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #a855f7;"><p style="margin: 0 0 4px 0;"><b>${deadToken.name}</b> has fallen within 30 feet of <b>${necro.name}</b>.</p><p style="margin: 0; font-size: 0.9em; color: #ccc;">Choose a reaction to harvest the death:</p>${btns}</div>`
         });
     }
 });
-// --- SAFELY WRAP PF2E'S DAMAGE ENGINE ---
-Hooks.once("ready", () => {
-    if (CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped) return;
-    
-    const originalApplyDamage = CONFIG.Actor.documentClass.prototype.applyDamage;
-    CONFIG.Actor.documentClass.prototype.applyDamage = async function(options) {
 
-        const preHp = this.system?.attributes?.hp?.value || 0;
-        
-        const result = await originalApplyDamage.call(this, options);
-        
-        const postHp = this.system?.attributes?.hp?.value || 0;
-        const hpLost = preHp - postHp;
-        
-        if (hpLost > 0) {
-            Hooks.callAll("necroHelperDamageApplied", this, options, hpLost);
-        }
-        
-        return result;
-    };
-    CONFIG.Actor.documentClass.prototype._necroHelperApplyDamageWrapped = true;
-});
 
 // --- BLOOD POOL: ONLY TRIGGER ON ACTUAL HP LOSS ---
 Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
@@ -880,944 +1109,511 @@ Hooks.on("necroHelperDamageApplied", async (actor, options, hpLost) => {
     }
 });
 Hooks.on("renderChatMessage", (message, html) => {
+    
     const $html = html instanceof jQuery ? html : $(html);
+    const aoeFlags = message.flags?.["aoe-easy-resolve"] || {};
+    const itemName = aoeFlags.itemName || message.flavor || "";
+    const msgContent = message.content || "";
     const reactionUsed = message.getFlag("necromancer-thrall-helper", "reactionUsed");
+    const isResolution = msgContent.includes("Resolution Summary") || aoeFlags.isResolution;
+
+    if (itemName === "Thick Skin" || itemName === "Recurring Nightmare") {
+        $html.find(".roll-damage-btn").remove();
+    }
+
     if (reactionUsed) {
         const labelColor = reactionUsed === "Inevitable Return" ? "#c084fc" : "#f87171";
         $html.find('.death-reaction-actions').html(`
             <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
-                <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
-                    <i class="fas fa-ban"></i> Death Reaction
-                </span>
-                <span style="display: block; color: ${labelColor}; font-size: 0.85em; font-style: italic; margin-top: 2px;">
-                    Expended: ${reactionUsed}
-                </span>
+                <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span>
+                <span style="display: block; color: ${labelColor}; font-size: 0.85em; font-style: italic; margin-top: 2px;">Expended: ${reactionUsed}</span>
             </div>
         `);
-    }
-
-    $html.find('.death-reaction-actions').each(function() {
-        const $container = $(this);
-        const $btn = $container.find('.blood-pool-spawn-btn, .inevitable-return-btn').first();
-        if ($btn.length > 0 && !reactionUsed) {
-            const isBleed = $btn.attr("data-is-bleed") === "true";
-            const necroId = $btn.attr("data-necro-id");
-            const targetId = $btn.attr("data-target-id");
-            const necroActor = game.actors.get(necroId);
-            if (!isBleed && necroActor && necroActor.getFlag("necromancer-thrall-helper", `harvested_${targetId}`)) {
-                $container.html(`
-                    <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
-                        <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
-                            <i class="fas fa-ban"></i> Death Reaction
-                        </span>
-                        <span style="display: block; color: #999; font-size: 0.85em; font-style: italic; margin-top: 2px;">
-                            Corpse Already Harvested
-                        </span>
-                    </div>
-                `);
-            }
-        }
-    });
-
-    $html.find('.inevitable-return-btn').off('click').on('click', async (e) => {
-        e.preventDefault();
-        const $btn = $(e.currentTarget);
-        const necroActorId = $btn.attr('data-necro-id');
-        const targetId = $btn.attr('data-target-id');
-        const size = $btn.attr('data-size');
-        
-        const attacker = game.actors.get(necroActorId);
-        const targetToken = canvas.tokens.get(targetId);
-
-        if (!attacker || !targetToken) return ui.notifications.warn("Could not locate the Necromancer or the corpse.");
-
-        if (attacker.getFlag("necromancer-thrall-helper", `harvested_${targetId}`) || message.getFlag("necromancer-thrall-helper", "reactionUsed")) {
-            return ui.notifications.warn("This corpse has already been harvested.");
-        }
-
-        const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
-        if (presets.length === 0) return ui.notifications.warn("No thrall presets found.");
-
-        let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
-        presets.forEach(p => {
-            const isAlreadyActive = canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name);
-            if (p.isUnique && isAlreadyActive) {
-                optionsHtml += `<option value="${p.id}" disabled>${p.name} (Already Active)</option>`;
-            } else {
-                optionsHtml += `<option value="${p.id}">${p.name}</option>`;
+    } else {
+        $html.find('.death-reaction-actions').each(function() {
+            const $container = $(this);
+            const $btn = $container.find('.blood-pool-spawn-btn, .inevitable-return-btn').first();
+            if ($btn.length > 0) {
+                const isBleed = $btn.attr("data-is-bleed") === "true";
+                const necroActor = game.actors.get($btn.attr("data-necro-id"));
+                if (!isBleed && necroActor?.getFlag("necromancer-thrall-helper", `harvested_${$btn.attr("data-target-id")}`)) {
+                    $container.html(`
+                        <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
+                            <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span>
+                            <span style="display: block; color: #999; font-size: 0.85em; font-style: italic; margin-top: 2px;">Corpse Already Harvested</span>
+                        </div>
+                    `);
+                }
             }
         });
+    }
 
-        const formHtml = `
-            <form>
-                <p>Select the identity for the new <b>${size === 'sm' ? 'Small' : 'Medium'}</b> thrall rising from <b>${targetToken.name}</b>:</p>
-                <div class="form-group">
-                    <label>Thrall Identity:</label>
-                    <div class="form-fields">
-                        <select id="inevitable-preset">${optionsHtml}</select>
-                    </div>
-                </div>
-            </form>
-        `;
+    const pf2eContext = message.flags?.pf2e?.context;
+    const attackerToken = canvas?.tokens?.get(message.speaker?.token);
+    const attackerActor = attackerToken?.actor || game.actors.get(message.speaker?.actor);
 
-        new Dialog({
-            title: "Inevitable Return",
-            content: formHtml,
-            buttons: {
-                summon: {
-                    icon: '<i class="fas fa-ghost"></i>',
-                    label: "Rise",
-                    callback: async (dialogHtml) => {
-                        await attacker.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
-                        if (game.user.isGM) {
-                            await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Inevitable Return");
-                        } else {
-                            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Inevitable Return" });
-                            $btn.closest('.death-reaction-actions').html(`
-                                <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
-                                    <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
-                                        <i class="fas fa-ban"></i> Death Reaction
-                                    </span>
-                                    <span style="display: block; color: #c084fc; font-size: 0.85em; font-style: italic; margin-top: 2px;">
-                                        Expended: Inevitable Return
-                                    </span>
-                                </div>
-                            `);
-                        }
+    if (pf2eContext?.type === "attack-roll" && pf2eContext?.outcome === "criticalSuccess" && attackerActor?.items.some(i => i.name === "Effect: Bind Heroic Spirit") && $html.find('.heroic-spawn-btn').length === 0) {
+        $html.find('.message-content').append(`<button type="button" class="heroic-spawn-btn" data-target-id="${pf2eContext.target?.token || ""}" style="background: #4a3600; color: #ffcc00; font-weight: bold; border: 1px solid #ffcc00; margin-top: 5px;"><i class="fas fa-ghost"></i> Inspire Heroic Thrall</button>`);
+    }
 
-                        const dialogForm = dialogHtml[0];
-                        const presetId = dialogForm.querySelector("#inevitable-preset").value;
+    const isPerfectedAttacker = attackerToken?.document?.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || (message.speaker?.alias || "").includes("Perfected");
+    if (isPerfectedAttacker && $html.find('.perfected-spawn-btn').length === 0) {
+        const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attackerActor?.getFlag("necromancer-thrall-helper", "masterId") || game.user.character?.id || "";
+        $html.find('.message-content').append(`<button type="button" class="perfected-spawn-btn" data-master-id="${masterId}" style="background: #3b0764; color: #d8b4fe; font-weight: bold; border: 1px solid #7e22ce; margin-top: 5px;"><i class="fas fa-ghost"></i> Sprout 4 Thralls</button>`);
+    }
 
-                        const basePayload = await prepareThrallPayload(attacker, presetId);
-                        if (!basePayload) return;
+    let casterId = message.speaker?.actor;
+    const aoeItemUuid = aoeFlags.itemUuid || aoeFlags.originItemUuid;
+    if (!casterId && aoeItemUuid?.includes("Actor.")) {
+        const parts = aoeItemUuid.split(".");
+        const actorIdx = parts.indexOf("Actor");
+        if (actorIdx !== -1) casterId = parts[actorIdx + 1];
+    }
+    if (!casterId && canvas?.tokens?.controlled?.length > 0) casterId = canvas.tokens.controlled[0].actor?.id;
+    const hasPermission = game.user.isGM || message.isAuthor || (casterId ? game.actors.get(casterId)?.isOwner : false);
 
-                        const finalPayload = foundry.utils.mergeObject(basePayload, {
-                            x: targetToken.x, y: targetToken.y,
-                            delta: { ownership: { [game.user.id]: 3 }, system: { traits: { size: { value: size } } } }
-                        });
-
-                        executeSpawn(finalPayload).catch(err => {
-                            console.error("Necromancer Helper | Inevitable Return spawn failed:", err);
-                            ui.notifications.error("Failed to materialize the corpse thrall.");
-                        });
-
-                        ui.notifications.info("The corpse yields its thrall.");
-                    }
-                },
-                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-            },
-            default: "summon"
-        }).render(true);
-    });
-
-    $html.find(".flesh-terrain-btn").off("click").on("click", async (e) => {
-        e.preventDefault();
-        const $btn = $(e.currentTarget);
-        
-        const tX = parseFloat($btn.attr("data-x"));
-        const tY = parseFloat($btn.attr("data-y"));
-        const tW = parseFloat($btn.attr("data-w"));
-        const tH = parseFloat($btn.attr("data-h"));
-        const masterId = $btn.attr("data-master");
-        const masterActor = game.actors.get(masterId);
-        
-        if (!canvas.scene || !masterActor) return;
-        const gridSize = canvas.scene.grid.size;
-        const hazardId = foundry.utils.randomID();
-        
-        const regionData = {
-            name: "Gory Remains",
-            color: "#4b5563",
-            shapes: [{
-                type: "rectangle", hole: false,
-                x: tX, y: tY, width: tW * gridSize, height: tH * gridSize, rotation: 0
-            }],
-            elevation: { bottom: -1000, top: 1000 },
-            behaviors: [{
-                name: "Gory Difficult Terrain",
-                type: "modifyMovementCost",
-                system: {} 
-            }],
-            flags: {
-                "necromancer-thrall-helper": { isFleshTerrain: true, hazardId: hazardId }
-            }
-        };
-
-        const dummyDrawing = {
-            author: game.user.id,
-            shape: { type: "r", width: tW * gridSize, height: tH * gridSize },
-            x: tX, y: tY, hidden: true, 
-            flags: { "necromancer-thrall-helper": { hazardId: hazardId } }
-        };
-
-        const hazardResult = await executeHazard(regionData, dummyDrawing);
-        const createdRegion = Array.isArray(hazardResult) ? hazardResult[0] : hazardResult;
-
-        if (!createdRegion) {
-            return ui.notifications.error("Failed to place Gory Remains. Check GM socket.");
+    const injectToggle = ($row, htmlString) => {
+        const $saveContainer = $row.find('.save-btn-container, .roll-save-btn').first();
+        if ($saveContainer.length > 0) $saveContainer.before(htmlString);
+        else {
+            const $img = $row.find('img').first();
+            if ($img.length > 0) $img.parent().append(htmlString);
+            else $row.find('.token-name, span[title]').first().after(htmlString);
         }
+    };
 
-        const trackerEffect = {
-            name: "Hazard: Gory Remains",
-            type: "effect",
-            img: "icons/magic/symbols/runes-star-orange.webp",
-            system: {
-                description: { value: "Tracks the duration of a Gory Remains difficult terrain hazard. Deleting this will clear the hazard from the map." },
-                duration: { value: 10, unit: "minutes", expiry: "turn-start" }
-            },
-            flags: {
-                "necromancer-thrall-helper": { isHazardTracker: true, hazardId: hazardId, sceneId: canvas.scene.id }
-            }
-        };
-        await masterActor.createEmbeddedDocuments("Item", [trackerEffect]);
-
-        $btn.closest('div').html(`
-            <p style="margin: 4px 0 0 0; text-align: center; color: #9ca3af; font-style: italic; font-size: 0.9em;">
-                <i class="fas fa-check"></i> Gory Remains Placed
-            </p>
-        `);
-    });
-
-    $html.find(".blood-pool-spawn-btn").off("click").on("click", async (e) => {
-        e.preventDefault();
-        const $btn = $(e.currentTarget);
-        const isBleed = $btn.attr("data-is-bleed") === "true";
-        const necroId = $btn.attr("data-necro-id");
-        const targetId = $btn.attr("data-target-id");
-
-        const necroActor = game.actors.get(necroId);
-        const targetToken = canvas.tokens.get(targetId);
-        if (!necroActor || !targetToken || !canvas.scene) return;
-
-        if (message.getFlag("necromancer-thrall-helper", "reactionUsed")) {
-            return ui.notifications.warn("This reaction has already been used.");
+    const isErasCard = (itemName.includes("Necrotic Bomb") || itemName.includes("Necrotic Blast") || msgContent.includes("Necrotic Bomb") || msgContent.includes("Necrotic Blast")) && !isResolution;
+    if (isErasCard) {
+        if ($html.find('#necro-bomb-style').length === 0) {
+            $html.prepend(`<style id="necro-bomb-style">.necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; } .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .void-opt { border-radius: 3px 0 0 3px; } .vit-opt { border-radius: 0 3px 3px 0; } .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
         }
-        if (!isBleed && necroActor.getFlag("necromancer-thrall-helper", `harvested_${targetId}`)) {
-            return ui.notifications.warn("This corpse has already been harvested.");
-        }
-
-        if (!isBleed) {
-            await necroActor.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
-        }
-
-        if (game.user.isGM) {
-            await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Blood Pool");
-        } else {
-            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Blood Pool" });
-            $btn.closest('.death-reaction-actions').html(`
-                <div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;">
-                    <span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;">
-                        <i class="fas fa-ban"></i> Death Reaction
-                    </span>
-                    <span style="display: block; color: #f87171; font-size: 0.85em; font-style: italic; margin-top: 2px;">
-                        Expended: Blood Pool
-                    </span>
-                </div>
-            `);
-        }
-
-        const gridSize = canvas.scene.grid.size;
-        const poolId = foundry.utils.randomID();
-        const necroLevel = necroActor.level || 1;
-
-        const behaviorSource = `
-            if (event.data.token?.actor) {
-                globalThis.NecroThrallHelper?.handleBloodPoolTrigger(event.region, event.data.token);
-            }
-        `;
-
-        const regionData = {
-            name: `Blood Pool (${necroActor.name})`,
-            color: "#990000",
-            shapes: [{
-                type: "rectangle", hole: false,
-                x: targetToken.x, y: targetToken.y, width: gridSize, height: gridSize, rotation: 0
-            }],
-            elevation: { bottom: -1000, top: 1000 },
-            behaviors: [{
-                name: "Blood Pool Absorption", type: "executeScript",
-                system: { events: ["tokenEnter", "tokenTurnStart"], source: behaviorSource }
-            }],
-            flags: {
-                "necromancer-thrall-helper": { isBloodPool: true, poolId: poolId, masterId: necroActor.id, healValue: necroLevel }
-            }
-        };
-
-        const drawingData = {
-            author: game.user.id, shape: { type: "e", width: gridSize, height: gridSize },
-            x: targetToken.x, y: targetToken.y, fillType: 1, fillColor: "#880000", fillAlpha: 0.5,
-            strokeWidth: 2, strokeColor: "#ff0000", strokeAlpha: 0.8, text: "🩸 Blood Pool", fontSize: 16, textColor: "#ffffff",
-            flags: { "necromancer-thrall-helper": { poolId: poolId } }
-        };
-
-        const [createdRegion] = await executeHazard(regionData, drawingData);
-        await canvas.scene.createEmbeddedDocuments("Drawing", [drawingData]);
-
-        setTimeout(async () => {
-            if (canvas.scene && canvas.scene.regions.has(createdRegion.id)) {
-                if (game.user.isGM) {
-                    await createdRegion.delete();
-                    const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId);
-                    if (drawing) await drawing.delete();
-                } else {
-                    game.socket.emit("module.necromancer-thrall-helper", { 
-                        action: "deleteBloodPool", 
-                        sceneId: canvas.scene.id, 
-                        regionId: createdRegion.id, 
-                        poolId: poolId 
-                    });
-                }
-            }
-        }, 60000);
-
-        ui.notifications.info("Blood Pool materialized on the battlefield.");
-    });
-});
-
-
-Hooks.once("ready", () => {
-    const aoeApi = game.modules.get("aoe-easy-resolve")?.api;
-    if (!aoeApi) return;
-
-
-    aoeApi.registerInterceptor("preRenderCard", async (payload) => {
-        const name = payload.itemName || payload.originItem?.name || "";
-        
-        if (name.includes("Calcification")) {
-            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-                const traits = token.actor.system?.traits?.value || [];
-                if (traits.includes("skeleton")) targetData.isImmune = true;
-            }
-        }
-        
-        if (name === "Thick Skin" || name.startsWith("Thick Skin")) {
-            payload.itemName = "Thick Skin";
-            payload.hazardDamage = null;
+        $html.find('[data-token-id]').each((i, el) => {
+            const $row = $(el);
+            const tokenId = $row.attr('data-token-id');
+            const targetToken = canvas?.tokens?.get(tokenId);
+            if (!targetToken?.actor) return;
             
-            const casterAlliance = payload.caster?.system?.details?.alliance 
-                                || payload.originItem?.actor?.system?.details?.alliance 
-                                || "party";
-                                
-            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
+            $row.find('.necro-type-toggle, .no-save-badge, .nuked-text').remove();
+            
+            const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
+            const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
+            const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
+            const hasDisease = targetToken.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
+
+            const cursorStyle = hasPermission ? 'pointer' : 'default';
+            const voidActive = currentType === 'void' ? 'active' : '';
+            const vitActive = currentType === 'vitality' ? 'active' : '';
+
+            injectToggle($row, `<div class="necro-type-toggle" data-token-id="${tokenId}"><button type="button" class="type-btn void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button><button type="button" class="type-btn vit-opt ${vitActive}" data-type="vitality" style="cursor: ${cursorStyle};">Vit</button></div>`);
+
+            const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
+            const $toggle = $row.find('.necro-type-toggle');
+
+            if (isUnaffected || hasDisease) {
+                $saveBtn.hide();
+                $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
                 
-                const targetAlliance = token.actor.system?.details?.alliance || (token.actor.hasPlayerOwner ? "party" : "opposition");
-                const isEnemy = targetAlliance !== casterAlliance;
-                
-                if (!isEnemy || targetData.isImmune) {
-                    delete payload.targets[tokenId];
+                if (isUnaffected && $row.find('.no-save-badge').length === 0) {
+                    $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
+                } else if (hasDisease && $row.find('.no-save-badge').length === 0) {
+                    $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.75em; margin-left: 5px;">(Already Infected)</span>');
                 }
+            } else {
+                $saveBtn.show();
+                $row.find('.no-save-badge').remove();
             }
-        }
-        
-        if (name.includes("Flesh Tsunami")) {
-            payload.itemName = "Flesh Tsunami (Greater Difficult Terrain)";
-        }
-        
-        if (name.includes("Blossoming Gore Hazard")) {
-            payload.hazardDamage = null; 
-            payload.itemName = "Blossoming Gore Hazard <style>.blossoming-gore-hide .roll-damage-btn { display: none !important; }</style><span class='blossoming-gore-hide'></span>";
-        }
-        
-        if (name.includes("Dread Mosquito")) {
-            payload.hazardDamage = null; 
-            payload.itemName = "Dread Mosquito Storm <style>.dms-hide .roll-damage-btn { display: none !important; }</style><span class='dms-hide'></span>";
-        }
-        
-        if (name.includes("Desperate Revival") || name.includes("Necrotic Bomb") || name.includes("Necrotic Blast") || name.includes("Dread Mosquito")) {
-            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null);
-            if (!msg) msg = game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName);
-            if (!msg) msg = game.messages.get(payload.originMessageId);
+        });
+    }
 
-            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-                
-                const currentType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
-                const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
-                
-                targetData.isImmune = isUnaffected;
-                targetData.isHealing = false; 
-            }
-        }
-        
-        if (name.includes("Harm")) {
-            let msg = payload.message || (payload.messageId ? game.messages.get(payload.messageId) : null);
-            if (!msg) msg = game.messages.contents.slice().reverse().find(m => m.flags?.["aoe-easy-resolve"]?.itemName === payload.itemName);
-            if (!msg) msg = game.messages.get(payload.originMessageId);
-
-            for (const [tokenId, targetData] of Object.entries(payload.targets)) {
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-                
-                const currentState = msg?.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
-                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
-                
-                let isHealing = false;
-                if (currentState === "void") isHealing = negHeal;
-                if (currentState === "vit") isHealing = !negHeal;
-                if (currentState === "heal") isHealing = true;
-                
-                targetData.isHealing = isHealing;
-                targetData.isImmune = false;
-            }
-        }
-        
-        return payload;
-    }, 999);
-
-
-    aoeApi.registerInterceptor("preApplyDamage", async (payload) => {
-        const msg = payload.messageId ? game.messages.get(payload.messageId) : null;
-        const originName = msg?.flags?.["aoe-easy-resolve"]?.itemName || payload.originItem?.name || "";
-        
-        if (originName.includes("Living Graveyard")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-                
-                const dos = targetData.degreeOfSuccess;
-                if (!dos) continue;
-
-                if (dos === "failure" || dos === "criticalFailure") {
-                    try { 
-                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("prone"); 
-                    } catch (e) {}
+    const isHarmCard = (itemName.includes("Harm") || msgContent.includes("Harm")) && !isResolution;
+    if (isHarmCard && casterId) {
+        const actor = game.actors.get(casterId);
+        if (actor) {
+            const hasMastery = actor.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death");
+            const hasInvert = actor.items.some(i => i.name === "Invert Harm" || i.slug === "invert-harm");
+            if (hasMastery || hasInvert) {
+                if ($html.find('#harm-toggle-style').length === 0) {
+                    $html.prepend(`<style id="harm-toggle-style">.harm-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .harm-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .harm-type-toggle button.active.harm-void-opt { background: #660066; color: #fff; border-color: #990099; } .harm-type-toggle button.active.harm-vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .harm-type-toggle button.active.harm-heal-opt { background: #4ade80; color: #000; border-color: #22c55e; } .harm-void-opt { border-radius: 3px 0 0 3px; } .harm-vit-opt { border-radius: ${hasInvert ? '0' : '0 3px 3px 0'}; } .harm-heal-opt { border-radius: 0 3px 3px 0; } .aoe-heal-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
+                }
+                $html.find('[data-token-id]').each((i, el) => {
+                    const $row = $(el);
+                    const tokenId = $row.attr('data-token-id');
+                    const targetToken = canvas?.tokens?.get(tokenId);
+                    if (!targetToken?.actor) return;
                     
-                    window.aoeEasyResolveApplying?.receipt.push({ 
-                        tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, 
-                        content: `<span style="color: #ef4444; font-weight: bold;">Knocked Prone!</span>`, 
-                        saveNote: "Violent Shake" 
-                    });
-                } else {
-                    window.aoeEasyResolveApplying?.receipt.push({ 
-                        tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, 
-                        content: `<span style="color: #4ade80; font-weight: bold;">Keeps their footing!</span>`, 
-                        saveNote: "Resisted" 
-                    });
-                }
-                targetData.hasApplied = true;
-            }
-        }
-        if (originName === "Thick Skin" || originName.startsWith("Thick Skin")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-                const dos = targetData.degreeOfSuccess;
-                if (!dos) continue;
+                    $row.find('.harm-type-toggle, .aoe-heal-badge, .nuked-text').remove();
+                    
+                    const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
+                    const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
+                    let isHealing = (currentState === "void" && negHeal) || currentState === "heal";
+                    let isUnaffected = (currentState === "vit" && !negHeal);
 
-                let receiptText = `<span style="font-weight: bold; color: #888;">Resists the shockwave.</span>`;
-                if (dos === "failure" || dos === "criticalFailure") {
-                    const existingSickened = token.actor.getCondition?.("sickened") || token.actor.itemTypes?.condition?.find(c => c.slug === "sickened");
-                    if (existingSickened) {
-                        receiptText = `<span style="color: #ff8c00;">Failed save, but already Sickened ${existingSickened.value || 1}.</span>`;
+                    const cursorStyle = hasPermission ? 'pointer' : 'default';
+                    const voidActive = currentState === 'void' ? 'active' : '';
+                    const vitActive = currentState === 'vit' ? 'active' : '';
+                    const healActive = currentState === 'heal' ? 'active' : '';
+
+                    const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt ${vitActive}" data-type="vit" style="cursor: ${cursorStyle};">Vit</button>` : '';
+                    const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt ${healActive}" data-type="heal" style="cursor: ${cursorStyle};">Heal</button>` : '';
+
+                    injectToggle($row, `<div class="harm-type-toggle" data-token-id="${tokenId}"><button type="button" class="harm-type-btn harm-void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button>${vitButton}${healButton}</div>`);
+
+                    const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
+                    const $toggle = $row.find('.harm-type-toggle');
+
+                    if (isHealing || isUnaffected) {
+                        $saveBtn.hide();
+                        $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
+                        
+                        if (isHealing && $row.find('.aoe-heal-badge').length === 0) {
+                            $toggle.after('<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(AoE Heal)</span>');
+                        } else if (isUnaffected && $row.find('.no-save-badge').length === 0) {
+                            $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
+                        }
                     } else {
-                        try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("sickened", { value: 1, max: 1 }); } catch (e) {}
-                        receiptText = `<span style="color: #ff0000; font-weight: bold;">Sickened by the violent muscle ripples! (Sickened 1)</span>`;
+                        $saveBtn.show();
+                        $row.find('.aoe-heal-badge, .no-save-badge').remove();
                     }
-                }
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptText, saveNote: "Thick Skin" });
-                targetData.hasApplied = true;
+                });
             }
         }
+    }
 
-        if (originName.includes("Desperate Revival")) {
-            let totalSiphonedDamage = 0;
-            const caster = payload.originItem?.actor || game.user.character;
-
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos || dos === "criticalSuccess" || targetData.isImmune) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #008000; font-weight: bold;">Unaffected by the siphon.</span>`, saveNote: "Crit Success / Immune" });
-                    targetData.hasApplied = true;
-                    continue;
+    const isBarrageCard = (itemName.includes("Bony Barrage") || msgContent.includes("Bony Barrage")) && !isResolution;
+    if (isBarrageCard) {
+        const hasArmor = message.getFlag("necromancer-thrall-helper", "boneArmorActivated");
+        const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
+        if (hasArmor) {
+            $html.find('[data-token-id]').each((i, el) => {
+                const $row = $(el);
+                const tokenId = $row.attr('data-token-id');
+                if (tokenId === sacrificedId) return $row.remove();
+                const targetToken = canvas?.tokens?.get(tokenId);
+                if (!targetToken?.actor) return;
+                if (targetToken.actor.system?.details?.alliance === "party" || targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY || targetToken.actor.id === casterId || targetToken.document.getFlag("necromancer-thrall-helper", "masterId") === casterId) {
+                    $row.find('.save-btn-container, .roll-save-btn').hide();
+                    if ($row.find('.bone-armor-badge').length === 0) $row.find('.token-name').after(' <span class="bone-armor-badge" style="color: #4ade80; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Bone Armor]</span>');
                 }
-
-                const targetLevel = token.actor.level || 1;
-                let damageAmount = 0;
-                if (dos === "success") damageAmount = Math.max(1, Math.floor(targetLevel / 2));
-                else if (dos === "failure") damageAmount = Math.max(1, targetLevel);
-                else if (dos === "criticalFailure") damageAmount = Math.max(2, targetLevel * 2);
-
-                const chosenType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-                
-                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-                if (DamageRoll && damageAmount > 0) {
-                    const roll = await new DamageRoll(`${damageAmount}[${chosenType}]`).evaluate({async: true});
-                    targetData.hasApplied = true; 
-                    await token.actor.applyDamage({ damage: roll, token: token.document });
-                    totalSiphonedDamage += damageAmount;
-                }
+            });
+            if ($html.find('.bone-armor-active-badge').length === 0) {
+                const badgeHtml = `<div class="bone-armor-active-badge" style="text-align: center; color: #4ade80; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-shield-alt"></i> Bone Armor Active</div>`;
+                const targetContainer = $html.find('.card-buttons').last();
+                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);
+                $html.find('.bone-armor-btn').remove();
             }
+        } else if (hasPermission && $html.find('.bone-armor-btn').length === 0) {
+            const btnHtml = `<button type="button" class="bone-armor-btn" style="margin-top: 5px; margin-bottom: 5px; background: #2c1a3b; color: #fff; border: 1px solid #9900ff;"><i class="fas fa-shield-alt"></i> Consume Thrall for Bone Armor</button>`;
+            const targetContainer = $html.find('.card-buttons').last();
+            if (targetContainer.length > 0) targetContainer.after(btnHtml); else $html.append(btnHtml);
+        }
+    }
 
-            if (caster && totalSiphonedDamage > 0) {
-                const currentHP = caster.system.attributes.hp.value;
-                const maxHP = caster.system.attributes.hp.max;
-                const halfMaxHP = Math.floor(maxHP / 2);
-                const actualHealed = Math.min(halfMaxHP, totalSiphonedDamage, maxHP - currentHP);
-
-                if (actualHealed > 0) {
-                    await caster.update({ "system.attributes.hp.value": currentHP + actualHealed });
-                    const necroToken = caster.getActiveTokens()[0];
-                    if (necroToken && canvas.ready) canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
-
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: necroToken?.id || caster.id, speaker: { alias: caster.name }, img: necroToken?.document?.texture?.src || caster.img, content: `<span style="color: #4ade80; font-weight: bold;">Siphoned ${totalSiphonedDamage} life force, regaining ${actualHealed} HP (Cap: ${halfMaxHP} HP).</span>`, saveNote: "Siphon Harvest" });
-                }
+    const isTsunamiCard = (itemName.includes("Flesh Tsunami") || msgContent.includes("Flesh Tsunami")) && !isResolution;
+    if (isTsunamiCard) {
+        const hasLimbs = message.getFlag("necromancer-thrall-helper", "limbsActivated");
+        const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
+        $html.find('.roll-all-npcs-btn, .apply-damage-btn').css("cssText", hasLimbs ? "display: flex !important;" : "display: none !important;");
+        if (hasLimbs) {
+            $html.find('[data-token-id]').each((i, el) => { if ($(el).attr('data-token-id') === sacrificedId) $(el).remove(); });
+            if ($html.find('.tsunami-active-badge').length === 0) {
+                const badgeHtml = `<div class="tsunami-active-badge" style="text-align: center; color: #ef4444; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-hands-helping"></i> Grasping Limbs Active (Escape DC ${aoeFlags.saveDC || 10})</div>`;
+                const targetContainer = $html.find('.card-buttons').last();
+                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);
+                $html.find('.tsunami-limb-btn').remove();
             }
+        } else if (hasPermission && $html.find('.tsunami-limb-btn').length === 0) {
+            const btnHtml = `<button type="button" class="tsunami-limb-btn" style="margin-top: 5px; margin-bottom: 5px; width: 100%; background: #3a0000; color: #fff; border: 1px solid #ef4444; padding: 5px; font-weight: bold;"><i class="fas fa-hand-holding-water"></i> Sacrifice Thrall for Grasping Limbs</button>`;
+            const targetContainer = $html.find('.card-buttons').last();
+            if (targetContainer.length > 0) targetContainer.before(btnHtml); else $html.append(btnHtml);
+        }
+    }
+
+    const customBtns = '.inevitable-return-btn, .flesh-terrain-btn, .blood-pool-spawn-btn, .gore-spawn-btn, .desperate-revival-trigger-btn, .heroic-spawn-btn, .perfected-spawn-btn, .tsunami-limb-btn, .bone-armor-btn, .type-btn, .necro-type-btn, .harm-type-btn';
+    $html.off('click', customBtns).on('click', customBtns, async (e) => {
+        const $btn = $(e.currentTarget);
+
+        if ($btn.hasClass('type-btn') || $btn.hasClass('necro-type-btn')) {
+            e.preventDefault(); e.stopPropagation();
+            if (!hasPermission) return;
+            const type = $btn.attr('data-type');
+            const tokenId = $btn.closest('.necro-type-toggle').attr('data-token-id');
+            await message.setFlag("necromancer-thrall-helper", `dmgType_${tokenId}`, type);
+            return;
         }
 
-        if (originName.includes("Recurring Nightmare")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos || dos === "criticalSuccess" || dos === "success" || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const frightenedVal = dos === "criticalFailure" ? 2 : 1;
-                let applied = false;
-                try {
-                    const currentVal = token.actor.getCondition?.("frightened")?.value || 0;
-                    if (currentVal < frightenedVal && typeof token.actor.increaseCondition === "function") {
-                        await token.actor.increaseCondition("frightened", { value: frightenedVal - currentVal });
-                        applied = true;
-                    }
-                } catch (e) {}
-
-                if (applied) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #a855f7; font-weight: bold;">Terrified by the phantasm! (Frightened ${frightenedVal})</span>`, saveNote: "Recurring Nightmare" });
-                }
-                targetData.hasApplied = true;
-            }
+        if ($btn.hasClass('harm-type-btn')) {
+            e.preventDefault(); e.stopPropagation();
+            if (!hasPermission) return;
+            const type = $btn.attr('data-type');
+            const tokenId = $btn.closest('.harm-type-toggle').attr('data-token-id');
+            await message.setFlag("necromancer-thrall-helper", `harmState_${tokenId}`, type);
+            return;
         }
-
-        if (originName.includes("Blossoming Gore Hazard")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos || dos === "criticalSuccess") {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #4ade80; font-weight: bold;">Unaffected!</span>`, saveNote: "Crit Success" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                let drainedVal = (dos === "success" || dos === "failure") ? 1 : (dos === "criticalFailure") ? 2 : 0;
-                
-                if (drainedVal > 0) {
-                    try {
-                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("drained", { value: drainedVal });
-                    } catch (e) {}
-                }
-
-                let thrallsToSpawn = dos === "failure" ? 1 : dos === "criticalFailure" ? 2 : 0;
-                let receiptContent = `<span style="color: #ff8c00; font-weight: bold;">Drained ${drainedVal}</span>`;
-                if (thrallsToSpawn > 0) receiptContent += `<br><div style="margin-top: 4px;"><button type="button" class="gore-spawn-btn" data-count="${thrallsToSpawn}" data-target-id="${tokenId}" style="background: #220000; color: #ff6b6b; border: 1px solid #ff0000; padding: 2px; font-size: 0.85em; border-radius: 4px; cursor: pointer;"><i class="fas fa-ghost"></i> Sprout ${thrallsToSpawn} Thrall(s)</button></div>`;
-
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptContent, saveNote: `Blossoming Gore (${dos})` });
-                targetData.hasApplied = true;
-            }
-        }
-
-        if (originName.includes("Conglomerate Grab")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (dos === "failure" || dos === "criticalFailure") {
-                    const cond = dos === "failure" ? "grabbed" : "restrained";
-                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition(cond); } catch (e) {}
-                    
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #cc0000; font-weight: bold;">Snared by limbs! (${cond.charAt(0).toUpperCase() + cond.slice(1)})</span>`, saveNote: "Conglomerate Grab" });
-                }
-                targetData.hasApplied = true;
-            }
-        }
-
-        if (originName.includes("Deathly Scream")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (dos === "failure" || dos === "criticalFailure") {
-                    const val = dos === "failure" ? 1 : 2;
-                    try { if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("frightened", {value: val}); } catch (e) {}
-                    
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #00ffff; font-weight: bold;">Terrified! (Frightened ${val})</span>`, saveNote: "Deathly Scream" });
-                }
-                targetData.hasApplied = true;
-            }
-        }
-
-        if (originName.includes("Dead Weight")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (dos && dos !== "criticalSuccess") {
-                    try {
-                        if (typeof token.actor.increaseCondition === "function") {
-                            await token.actor.increaseCondition("off-guard");
-                            if (dos === "failure" || dos === "criticalFailure") {
-                                await token.actor.increaseCondition("slowed", { value: dos === "failure" ? 1 : 2 });
-                            }
+        if ($btn.hasClass('inevitable-return-btn')) {
+            e.preventDefault();
+            const necroActorId = $btn.attr('data-necro-id');
+            const targetId = $btn.attr('data-target-id');
+            const size = $btn.attr('data-size');
+            const attacker = game.actors.get(necroActorId);
+            const targetToken = canvas.tokens.get(targetId);
+            if (!attacker || !targetToken) return ui.notifications.warn("Could not locate the Necromancer or the corpse.");
+            if (attacker.getFlag("necromancer-thrall-helper", `harvested_${targetId}`) || message.getFlag("necromancer-thrall-helper", "reactionUsed")) return ui.notifications.warn("This corpse has already been harvested.");
+            const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
+            if (presets.length === 0) return ui.notifications.warn("No thrall presets found.");
+            let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
+            presets.forEach(p => { optionsHtml += (p.isUnique && canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name)) ? `<option value="${p.id}" disabled>${p.name} (Already Active)</option>` : `<option value="${p.id}">${p.name}</option>`; });
+            new Dialog({
+                title: "Inevitable Return",
+                content: `<form><p>Select the identity for the new <b>${size === 'sm' ? 'Small' : 'Medium'}</b> thrall rising from <b>${targetToken.name}</b>:</p><div class="form-group"><label>Thrall Identity:</label><div class="form-fields"><select id="inevitable-preset">${optionsHtml}</select></div></div></form>`,
+                buttons: {
+                    summon: { icon: '<i class="fas fa-ghost"></i>', label: "Rise", callback: async (dialogHtml) => {
+                        await attacker.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
+                        if (game.user.isGM) await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Inevitable Return");
+                        else {
+                            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Inevitable Return" });
+                            $btn.closest('.death-reaction-actions').html(`<div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;"><span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span><span style="display: block; color: #c084fc; font-size: 0.85em; font-style: italic; margin-top: 2px;">Expended: Inevitable Return</span></div>`);
                         }
-                    } catch (e) {}
-
-                    let receiptText = `<span style="color: #a855f7; font-weight: bold;">Off-Guard!</span>`;
-                    if (dos === "failure" || dos === "criticalFailure") receiptText += ` <span style="color: #ff0000; font-weight: bold;">(Slowed ${dos === "failure" ? 1 : 2})</span>`;
-                    
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptText, saveNote: "Dead Weight" });
-                }
-                targetData.hasApplied = true;
-            }
+                        const basePayload = await prepareThrallPayload(attacker, dialogHtml[0].querySelector("#inevitable-preset").value);
+                        if (!basePayload) return;
+                        executeSpawn(foundry.utils.mergeObject(basePayload, { x: targetToken.x, y: targetToken.y, elevation: targetToken.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 }, system: { traits: { size: { value: size } } } } })).catch(() => ui.notifications.error("Failed to materialize the corpse thrall."));
+                        ui.notifications.info("The corpse yields its thrall.");
+                    }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                }, default: "summon"
+            }).render(true);
         }
 
-        if (originName.includes("Blood Infusion")) {
-            const spellRank = msg?.flags?.["aoe-easy-resolve"]?.spellRank || 1;
+        else if ($btn.hasClass('flesh-terrain-btn')) {
+            e.preventDefault();
+            const tX = parseFloat($btn.attr("data-x")), tY = parseFloat($btn.attr("data-y")), tW = parseFloat($btn.attr("data-w")), tH = parseFloat($btn.attr("data-h")), masterActor = game.actors.get($btn.attr("data-master"));
+            if (!canvas.scene || !masterActor) return;
+            const gridSize = canvas.scene.grid.size, hazardId = foundry.utils.randomID();
+            const hazardResult = await executeHazard({ name: "Gory Remains", color: "#4b5563", shapes: [{ type: "rectangle", hole: false, x: tX, y: tY, width: tW * gridSize, height: tH * gridSize, rotation: 0 }], elevation: { bottom: -1000, top: 1000 }, behaviors: [{ name: "Gory Difficult Terrain", type: "modifyMovementCost", system: {} }], flags: { "necromancer-thrall-helper": { isFleshTerrain: true, hazardId: hazardId } } }, { author: game.user.id, shape: { type: "r", width: tW * gridSize, height: tH * gridSize }, x: tX, y: tY, hidden: true, flags: { "necromancer-thrall-helper": { hazardId: hazardId } } });
+            if (!hazardResult?.regionId) return ui.notifications.error("Failed to place Gory Remains. Check GM socket.");
+            await masterActor.createEmbeddedDocuments("Item", [{ name: "Hazard: Gory Remains", type: "effect", img: "icons/magic/symbols/runes-star-orange.webp", system: { description: { value: "Tracks the duration of a Gory Remains difficult terrain hazard. Deleting this will clear the hazard from the map." }, duration: { value: 10, unit: "minutes", expiry: "turn-start" } }, flags: { "necromancer-thrall-helper": { isHazardTracker: true, hazardId: hazardId, sceneId: canvas.scene.id } } }]);
+            $btn.closest('div').html(`<p style="margin: 4px 0 0 0; text-align: center; color: #9ca3af; font-style: italic; font-size: 0.9em;"><i class="fas fa-check"></i> Gory Remains Placed</p>`);
+        }
+
+        else if ($btn.hasClass('blood-pool-spawn-btn')) {
+            e.preventDefault();
+            const isBleed = $btn.attr("data-is-bleed") === "true", targetId = $btn.attr("data-target-id"), necroActor = game.actors.get($btn.attr("data-necro-id")), targetToken = canvas.tokens.get(targetId);
+            if (!necroActor || !targetToken || !canvas.scene) return;
+            if (message.getFlag("necromancer-thrall-helper", "reactionUsed")) return ui.notifications.warn("This reaction has already been used.");
+            if (!isBleed && necroActor.getFlag("necromancer-thrall-helper", `harvested_${targetId}`)) return ui.notifications.warn("This corpse has already been harvested.");
+
+            ui.notifications.info(`Click the canvas adjacent to ${targetToken.name} to place the Blood Pool. Right-click to cancel.`);
+            document.body.style.cursor = "crosshair"; canvas.app.view.style.cursor = "crosshair";
             
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
+            const gridSize = canvas.scene.grid.size;
+            const ghost = new PIXI.Graphics();
+            ghost.beginFill(0x990000, 0.4); ghost.lineStyle(2, 0xff0000, 0.8); ghost.drawRect(0, 0, gridSize, gridSize); ghost.endFill();
+            ghost.zIndex = 1000; ghost.position.set(-1000, -1000); canvas.tokens.addChild(ghost);
+            
+            const updateGhost = (ev) => { const pos = ev.data.getLocalPosition(canvas.app.stage); const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos; ghost.position.set(snapped.x, snapped.y); };
+            canvas.stage.on("pointermove", updateGhost);
+            
+            const cleanUp = () => { document.body.style.cursor = ""; canvas.app.view.style.cursor = ""; canvas.stage.off("pointermove", updateGhost); ghost.destroy(); };
+            
+            const interactionHandler = async (ev) => {
+                if (ev.data.button !== 0 && ev.data.button !== 2) return canvas.stage.once("pointerdown", interactionHandler);
+                if (ev.data.button === 2) { ui.notifications.info("Blood Pool placement cancelled."); return cleanUp(); }
+                
+                const pos = ev.data.getLocalPosition(canvas.app.stage), snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                const dist = (Math.max(Math.abs((targetToken.x + (targetToken.document.width * gridSize) / 2) - (snapped.x + (gridSize / 2))), Math.abs((targetToken.y + (targetToken.document.height * gridSize) / 2) - (snapped.y + (gridSize / 2)))) / gridSize) * (canvas.scene?.grid?.distance || 5);
+                
+                if (dist > 15) { ui.notifications.warn("The Blood Pool must be placed adjacent to the corpse!"); return canvas.stage.once("pointerdown", interactionHandler); }
+                
+                cleanUp();
+
+                if (!isBleed) await necroActor.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
+                if (game.user.isGM) await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Blood Pool");
+                else {
+                    game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Blood Pool" });
+                    $btn.closest('.death-reaction-actions').html(`<div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;"><span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span><span style="display: block; color: #f87171; font-size: 0.85em; font-style: italic; margin-top: 2px;">Expended: Blood Pool</span></div>`);
                 }
 
-                const dos = targetData.degreeOfSuccess;
-                if (dos && dos !== "criticalSuccess") {
-                    try {
-                        const bleedEffect = { name: "Infused Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp", system: { description: { value: "Loses immunity to bleed and is considered a creature with blood for 1 minute." }, duration: { value: 1, unit: "minutes", expiry: null }, rules: [{ key: "Immunity", type: "bleed", mode: "remove" }] } };
-                        await token.actor.createEmbeddedDocuments("Item", [bleedEffect]);
-                        
-                        const damageFormula = dos === "success" ? `${spellRank}` : dos === "failure" ? `${spellRank}d6` : `${spellRank * 2}d6`;
-                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("persistent-damage", { value: damageFormula, suboption: "bleed" });
-                        
-                        window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #ff0000; font-weight: bold;">Infused! Bleed Immunity Stripped & takes ${damageFormula} persistent bleed.</span>`, saveNote: "Blood Infusion" });
-                    } catch (e) {}
-                }
-                targetData.hasApplied = true;
-            }
+                const poolId = foundry.utils.randomID(), regionData = { name: `Blood Pool (${necroActor.name})`, color: "#990000", shapes: [{ type: "rectangle", hole: false, x: snapped.x, y: snapped.y, width: gridSize, height: gridSize, rotation: 0 }], elevation: { bottom: -1000, top: 1000 }, behaviors: [{ name: "Blood Pool Absorption", type: "executeScript", system: { events: ["tokenEnter", "tokenTurnStart"], source: `if (event.data.token?.actor) globalThis.NecroThrallHelper?.handleBloodPoolTrigger(event.region, event.data.token);` } }], flags: { "necromancer-thrall-helper": { isBloodPool: true, poolId: poolId, masterId: necroActor.id, healValue: necroActor.level || 1 } } }, drawingData = { author: game.user.id, shape: { type: "e", width: gridSize, height: gridSize }, x: snapped.x, y: snapped.y, fillType: 1, fillColor: "#880000", fillAlpha: 0.5, strokeWidth: 2, strokeColor: "#ff0000", strokeAlpha: 0.8, text: "🩸 Blood Pool", fontSize: 16, textColor: "#ffffff", flags: { "necromancer-thrall-helper": { poolId: poolId } } };
+                const hazardResult = await executeHazard(regionData, drawingData);
+                
+                setTimeout(async () => { 
+                    if (game.user.isGM) { 
+                        if (hazardResult?.regionId) await canvas.scene?.regions.get(hazardResult.regionId)?.delete(); 
+                        const dIds = canvas.scene?.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "poolId") === poolId).map(d => d.id) || [];
+                        if (dIds.length) await canvas.scene?.deleteEmbeddedDocuments("Drawing", dIds); 
+                    } else { 
+                        game.socket.emit("module.necromancer-thrall-helper", { action: "deleteBloodPool", sceneId: canvas.scene?.id, regionId: hazardResult?.regionId, poolId: poolId }); 
+                    } 
+                }, 60000);
+                
+                ui.notifications.info("Blood Pool materialized on the battlefield.");
+            };
+            canvas.stage.once("pointerdown", interactionHandler);
         }
 
-        if (originName.includes("Life Tap")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor || targetData.isImmune) {
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (dos && dos !== "criticalSuccess") {
-                    const drainedVal = dos === "success" ? 1 : dos === "failure" ? 2 : 3;
-                    try {
-                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("drained", { value: drainedVal });
-                    } catch (e) {}
-
-                    const targetLevel = token.actor.level || 1;
-                    const hpLost = drainedVal * targetLevel;
-                    const healingAmount = hpLost * 2;
-
-                    const caster = payload.originItem?.actor || game.user.character;
-                    const eligibleAllies = canvas.tokens.placeables.filter(t => t.actor && (t.actor.system?.details?.alliance === "party" || t.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY));
-                    let recipientActor = caster;
-                    
-                    if (eligibleAllies.length > 1) {
-                        let optionsHtml = eligibleAllies.map(t => `<option value="${t.actor.id}">${t.name}</option>`).join("");
-                        await new Promise(resolve => {
-                            new Dialog({
-                                title: "Life Tap: Siphon Recipient",
-                                content: `<p><b>${token.name}</b> lost ${hpLost} maximum HP. Choose who receives <b>${healingAmount} HP</b> of healing:</p><form><select id="heal-recipient">${optionsHtml}</select></form>`,
-                                buttons: { select: { label: "Apply Healing", callback: (html) => { const found = game.actors.get(html.find("#heal-recipient").val()); if (found) recipientActor = found; resolve(); } } },
-                                default: "select"
-                            }).render(true);
-                        });
-                    }
-
-                    if (recipientActor) {
-                        const currentHP = recipientActor.system.attributes.hp.value;
-                        const maxHP = recipientActor.system.attributes.hp.max;
-                        const actualHealed = Math.min(maxHP - currentHP, healingAmount);
-                        await recipientActor.update({ "system.attributes.hp.value": currentHP + actualHealed });
-                        
-                        const recipientToken = recipientActor.getActiveTokens()[0];
-                        if (recipientToken && canvas.ready && actualHealed > 0) canvas.interface.createScrollingText(recipientToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
-
-                        window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #8a2be2; font-weight: bold;">Drained ${drainedVal} (${hpLost} HP).</span><br><span style="color: #4ade80;">Healed ${recipientActor.name} for ${actualHealed} HP!</span>`, saveNote: "Life Tap" });
-                    }
-                }
-                targetData.hasApplied = true;
-            }
-        }
-
-        if (originName.includes("Flesh Tsunami")) {
-            const hasLimbs = msg?.getFlag("necromancer-thrall-helper", "limbsActivated");
-            const aoeFlags = msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {};
-            const saveDC = aoeFlags.saveDC || 10;
-
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                if (!hasLimbs) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #888; font-weight: bold;">Area is Greater Difficult Terrain.</span>`, saveNote: "Flesh Tsunami" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                if (targetData.isImmune) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #888; font-weight: bold;">Unaffected by limbs (Ally).</span>`, saveNote: "Immune" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos || dos === "criticalSuccess" || dos === "success") {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #4ade80; font-weight: bold;">Evades the grasping flesh!</span>`, saveNote: "Flesh Tsunami" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                try {
-                    if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("immobilized");
-                } catch (e) { }
-
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #ef4444; font-weight: bold;">Snared by the gory wave! (Immobilized, Escape DC ${saveDC})</span>`, saveNote: "Flesh Tsunami" });
-                targetData.hasApplied = true;
-            }
-        }
-        if (originName.includes("Temporary Possession")) {
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos) continue;
-
-                let receiptText = "";
-                let actionsAllowed = 0;
-
-                if (dos === "criticalSuccess") {
-                    receiptText = `<span style="color: #4ade80; font-weight: bold;">Shrugs off the possession completely! Unaffected.</span>`;
-                } else {
-                    if (dos === "success") actionsAllowed = 1;
-                    else if (dos === "failure") actionsAllowed = 2;
-                    else if (dos === "criticalFailure") actionsAllowed = 3;
-
-                    try {
-                        if (typeof token.actor.increaseCondition === "function") await token.actor.increaseCondition("stunned", { value: 1 });
-                    } catch (e) {}
-
-                    receiptText = `
-                        <div style="text-align: left; font-size: 0.9em; margin-top: 2px;">
-                            <span style="color: #ef4444; font-weight: bold; text-transform: uppercase;">Controlled (${dos.replace(/([A-Z])/g, ' $1')})</span><br>
-                            • Can spend up to <b>${actionsAllowed} action(s)</b>: <i>Drop Prone, Interact, Release, or Strike</i>.<br>
-                            • Strike MAP applies.<br>
-                            • Becomes <b>Stunned 1</b> at end of turn.<br>
-                            <span style="color: #f87171; font-size: 0.85em; font-style: italic;">⚠️ Reflected Damage Warning: If this creature loses HP while possessed or stunned by this, you take half that amount!</span>
-                        </div>
-                    `;
-                }
-
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptText, saveNote: `Temporary Possession (${dos})` });
-                targetData.hasApplied = true;
-            }
-        }
-
-        if (originName.includes("Calcification")) {
-            const aoeFlags = msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {};
-            const saveDC = aoeFlags.saveDC || 10;
-
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos) continue;
-
-                const traits = token.actor.system?.traits?.value || [];
-                const isSkeleton = traits.includes("skeleton") || targetData.isImmune;
-
-                if (isSkeleton || dos === "criticalSuccess") {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #4ade80; font-weight: bold;">Unaffected by the bone dust!</span>`, saveNote: isSkeleton ? "Immune (Skeleton)" : "Crit Success" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const isIncorporeal = traits.includes("incorporeal");
-                let title = "";
-                let details = "";
-                let slowVal = 0;
-                let weakVal = 0;
-
-                if (dos === "success") {
-                    slowVal = 1; weakVal = 5;
-                    title = `<span style="color: #eab308; font-weight: bold; text-transform: uppercase;">Calcifying!</span>`;
-                    details = `Slowed 1, Weakness 5 Bludg. (1 rd)`;
-                } else if (dos === "failure") {
-                    slowVal = 1; weakVal = 10;
-                    title = `<span style="color: #f97316; font-weight: bold; text-transform: uppercase;">Calcifying Heavily!</span>`;
-                    details = `Slowed 1, Weakness 10 Bludg.<br><span style="font-size: 0.9em; font-style: italic; color: #ccc;">End of turn Fort save.</span>`;
-                } else if (dos === "criticalFailure") {
-                    slowVal = 2; weakVal = 10;
-                    title = `<span style="color: #ef4444; font-weight: bold; text-transform: uppercase;">Rapidly Petrifying!</span>`;
-                    details = `Slowed 2, Weakness 10 Bludg.<br><span style="font-size: 0.9em; font-style: italic; color: #ccc;">End of turn Fort save.</span>`;
-                }
-
-                if (isIncorporeal) details += `<br><span style="color: #a855f7; font-weight: bold; font-size: 0.95em;">⚠️ Loses Incorporeal Trait!</span>`;
-
-                const receiptText = `
-                    <div style="display: flex; flex-direction: column; align-items: flex-end; text-align: right; width: 100%; line-height: 1.2;">
-                        ${title}
-                        <div style="font-size: 0.9em; margin-top: 2px;">${details}</div>
-                    </div>
-                `;
-
-                try {
-                    if (typeof token.actor.increaseCondition === "function") {
-                        for (let i = 0; i < slowVal; i++) await token.actor.increaseCondition("slowed");
-                    }
-                } catch (e) { }
-
-                try {
-                    const existingEffect = token.actor.items.find(i => i.system?.slug === "effect-calcification" || i.name === "Effect: Calcification");
-                    if (!existingEffect) {
-                        const effectData = {
-                            name: "Effect: Calcification", type: "effect", img: "icons/magic/death/skeleton-skull-soul-blue.webp",
-                            system: {
-                                slug: "effect-calcification", level: { value: 9 },
-                                duration: { value: dos === "success" ? 1 : -1, unit: dos === "success" ? "rounds" : "unlimited", expiry: "turn-start" },
-                                description: { value: `You are calcifying. Weakness ${weakVal} to bludgeoning.` },
-                                rules: [{ key: "Weakness", type: "bludgeoning", value: weakVal }]
-                            },
-                            flags: { "necromancer-thrall-helper": { calcificationDC: saveDC, isCalcifying: true } }
+        else if ($btn.hasClass('gore-spawn-btn')) {
+            e.preventDefault();
+            const count = parseInt($btn.attr('data-count'), 10), targetToken = canvas.tokens.get($btn.attr('data-target-id')), attacker = game.user.character || canvas.tokens.controlled[0]?.actor;
+            if (!attacker) return ui.notifications.warn("No Necromancer found to command the thralls!");
+            const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
+            if (presets.length === 0) return ui.notifications.warn("No thrall presets found.");
+            let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
+            presets.forEach(p => { optionsHtml += (p.isUnique && canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name)) ? `<option value="${p.id}" disabled>${p.name} (Already Active)</option>` : `<option value="${p.id}">${p.name}</option>`; });
+            let formHtml = `<form><p>Select the identities for the <b>${count}</b> new thrall(s) spawned near <b>${targetToken ? targetToken.name : "the field"}</b>:</p>`;
+            for (let i = 0; i < count; i++) formHtml += `<div class="form-group"><label>Thrall ${i + 1}:</label><div class="form-fields"><select id="gore-preset-${i}">${optionsHtml}</select></div></div>`;
+            new Dialog({
+                title: "Blood-Born Thralls", content: formHtml + `</form>`,
+                buttons: {
+                    summon: { icon: '<i class="fas fa-ghost"></i>', label: "Sprout", callback: async (dialogHtml) => {
+                        let selections = [], selectedUnique = new Set();
+                        for (let i = 0; i < count; i++) {
+                            const val = dialogHtml[0].querySelector(`#gore-preset-${i}`).value, preset = presets.find(p => p.id === val);
+                            if (preset?.isUnique) { if (selectedUnique.has(val)) return ui.notifications.error(`${preset.name} is unique and cannot be summoned multiple times.`); selectedUnique.add(val); }
+                            selections.push(val);
+                        }
+                        let currentSpawnIndex = 0;
+                        ui.notifications.info(`Click the canvas to sprout Thrall 1 adjacent to the field. Right-click to cancel.`);
+                        document.body.style.cursor = "crosshair"; canvas.app.view.style.cursor = "crosshair";
+                        const ghost = new PIXI.Graphics(); ghost.beginFill(0xcc0000, 0.4); ghost.lineStyle(2, 0xff0000, 0.8); ghost.drawRect(0, 0, canvas.grid.size, canvas.grid.size); ghost.endFill(); ghost.zIndex = 1000; ghost.position.set(-1000, -1000); canvas.tokens.addChild(ghost);
+                        const updateGhost = (ev) => { const pos = ev.data.getLocalPosition(canvas.app.stage); const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos; ghost.position.set(snapped.x, snapped.y); };
+                        canvas.stage.on("pointermove", updateGhost);
+                        const cleanUp = () => { document.body.style.cursor = ""; canvas.app.view.style.cursor = ""; canvas.stage.off("pointermove", updateGhost); ghost.destroy(); };
+                        const interactionHandler = async (ev) => {
+                            if (ev.data.button !== 0 && ev.data.button !== 2) return canvas.stage.once("pointerdown", interactionHandler);
+                            if (ev.data.button === 2) { ui.notifications.info("Sprouting cancelled."); return cleanUp(); }
+                            const pos = ev.data.getLocalPosition(canvas.app.stage), snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                            const basePayload = await prepareThrallPayload(attacker, selections[currentSpawnIndex]);
+                            if (!basePayload) { return cleanUp(); }
+                            executeSpawn(foundry.utils.mergeObject(basePayload, { x: snapped.x, y: snapped.y, delta: { ownership: { [game.user.id]: 3 } } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
+                            currentSpawnIndex++;
+                            if (currentSpawnIndex < count) { ui.notifications.info(`Place Thrall ${currentSpawnIndex + 1}.`); canvas.stage.once("pointerdown", interactionHandler); }
+                            else { cleanUp(); $btn.remove(); ui.notifications.info("All blood thralls sprouted."); }
                         };
-                        await token.actor.createEmbeddedDocuments("Item", [effectData]);
-                    }
-                } catch (e) { }
+                        canvas.stage.once("pointerdown", interactionHandler);
+                    }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                }, default: "summon"
+            }).render(true);
+        }
 
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: receiptText, saveNote: `Calcification (${dos})` });
-                targetData.hasApplied = true;
+        else if ($btn.hasClass('desperate-revival-trigger-btn')) {
+            e.preventDefault();
+            const necroActor = game.actors.get($btn.attr("data-necro-id")), necroToken = necroActor?.getActiveTokens()[0];
+            if (!necroActor || !necroToken) return ui.notifications.warn("Necromancer token not found on the canvas.");
+            const preWounded = necroActor.getCondition?.("wounded")?.value || 0;
+            await necroActor.update({ "system.attributes.hp.value": 1 });
+            await necroActor.setFlag("necromancer-thrall-helper", "desperateRevivalUsed", true);
+            await necroActor.getCondition?.("dying")?.delete(); await necroActor.getCondition?.("unconscious")?.delete();
+            for (let i = 0; i < 20; i++) {
+                const w = necroActor.getCondition?.("wounded");
+                if ((w?.value || 0) > preWounded) { if (preWounded === 0) await w.delete(); else if (typeof necroActor.decreaseCondition === "function") await necroActor.decreaseCondition("wounded"); break; }
+                await new Promise(r => setTimeout(r, 100));
+            }
+            let spellDC = 10 + Math.floor((necroActor.level || 1) * 1.5);
+            if (necroActor.spellcasting) {
+                let maxDC = 0;
+                (typeof necroActor.spellcasting.contents === "function" ? necroActor.spellcasting.contents() : Array.from(necroActor.spellcasting)).forEach(e => { const d = e.dc?.value || e.statistic?.dc?.value || e.system?.dc?.value; if (d > maxDC) maxDC = d; });
+                if (maxDC > 0) spellDC = maxDC;
+            }
+            if (spellDC === 10 && necroActor.system?.attributes?.classDC?.dc) spellDC = necroActor.system.attributes.classDC.dc.value;
+            const spellSys = { level: { value: 8 }, traits: { value: ["necromancer", "occult", "void", "healing", "uncommon"] }, tradition: { value: "occult" }, area: { type: "emanation", value: 60 }, defense: { save: { statistic: "fortitude", basic: false, dc: { value: spellDC } } } };
+            let drSpell = necroActor.items.find(i => i.type === "spell" && i.name === "Desperate Revival");
+            if (!drSpell) drSpell = (await necroActor.createEmbeddedDocuments("Item", [{ name: "Desperate Revival", type: "spell", img: "icons/magic/life/heart-shadow-red.webp", system: spellSys }]))[0];
+            else await drSpell.update({ system: spellSys });
+            window.aoeEasyResolveCache = { item: drSpell, name: "Desperate Revival", dc: spellDC, type: "fortitude", hazardDuration: null };
+            await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{ t: "circle", user: game.user.id, distance: 60 + (((necroToken.document.width || 1) * (canvas.scene?.grid?.distance || 5)) / 2), direction: 0, x: necroToken.center.x, y: necroToken.center.y, fillColor: "#7f1d1d", flags: { "necromancer-thrall-helper": { source: "desperate-revival" }, "aoe-easy-resolve": { useOverride: true, saveType: "fortitude", saveDC: spellDC, isAreaDamage: true, allyBaseEffect: "standard", enemyBaseEffect: "standard" } } }]);
+            $btn.replaceWith(`<p style="margin: 0; color: #4ade80; font-weight: bold; text-align: center;"><i class="fas fa-check"></i> Desperate Revival Unleashed! (1 HP)</p>`);
+        }
+
+        else if ($btn.hasClass('heroic-spawn-btn')) {
+            e.preventDefault();
+            if (!game.user.isGM && !attackerToken?.isOwner) return;
+            const targetToken = canvas.tokens.get($btn.attr('data-target-id')), presets = typeof getThrallPresets === "function" ? getThrallPresets(attackerActor) : [];
+            let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
+            presets.forEach(p => { optionsHtml += (p.isUnique && canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attackerActor.id && t.name === p.name)) ? `<option value="${p.id}" disabled>${p.name} (Already Active)</option>` : `<option value="${p.id}">${p.name}</option>`; });
+            new Dialog({
+                title: "Inspire Heroic Thrall", content: `<p>Your critical strike calls a spirit to the battlefield!</p><p>Select an identity to spawn adjacent to <b>${targetToken ? targetToken.name : "the target"}</b>:</p><form><div class="form-group"><select id="heroic-preset">${optionsHtml}</select></div></form>`,
+                buttons: {
+                    summon: { icon: '<i class="fas fa-magic"></i>', label: "Inspire", callback: async (dialogHtml) => {
+                        ui.notifications.info(`Click the canvas adjacent to ${targetToken ? targetToken.name : "the target"} to place the thrall. Right-click to cancel.`);
+                        document.body.style.cursor = "crosshair"; canvas.app.view.style.cursor = "crosshair";
+                        const ghost = new PIXI.Graphics(); ghost.beginFill(0xffcc00, 0.3); ghost.lineStyle(2, 0xffcc00, 0.8); ghost.drawRect(0, 0, canvas.grid.size, canvas.grid.size); ghost.endFill(); ghost.zIndex = 1000; ghost.position.set(-1000, -1000); canvas.tokens.addChild(ghost);
+                        const updateGhost = (ev) => { const pos = ev.data.getLocalPosition(canvas.app.stage); const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos; ghost.position.set(snapped.x, snapped.y); };
+                        canvas.stage.on("pointermove", updateGhost);
+                        const cleanUp = () => { document.body.style.cursor = ""; canvas.app.view.style.cursor = ""; canvas.stage.off("pointermove", updateGhost); ghost.destroy(); };
+                        const interactionHandler = async (ev) => {
+                            if (ev.data.button !== 0 && ev.data.button !== 2) return canvas.stage.once("pointerdown", interactionHandler);
+                            if (ev.data.button === 2) { ui.notifications.info("Inspiration cancelled."); return cleanUp(); }
+                            const pos = ev.data.getLocalPosition(canvas.app.stage), snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                            if (targetToken) {
+                                const dist = (Math.max(Math.abs((targetToken.x + (targetToken.document.width * canvas.grid.size) / 2) - (snapped.x + (canvas.grid.size / 2))), Math.abs((targetToken.y + (targetToken.document.height * canvas.grid.size) / 2) - (snapped.y + (canvas.grid.size / 2)))) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
+                                if (dist > 15) { ui.notifications.warn("The inspired thrall must be placed adjacent to the target of the critical strike!"); return canvas.stage.once("pointerdown", interactionHandler); }
+                            }
+                            cleanUp();
+                            const basePayload = await prepareThrallPayload(attackerActor, dialogHtml.find('#heroic-preset').val());
+                            if (!basePayload) return;
+                            const newOwnership = { default: 0 }; Object.keys(attackerActor.ownership || {}).filter(k => attackerActor.ownership[k] === 3 && k !== "default").forEach(id => newOwnership[id] = 3); newOwnership[game.user.id] = 3;
+                            executeSpawn(foundry.utils.mergeObject(basePayload, { actorLink: false, x: snapped.x, y: snapped.y, delta: { ownership: newOwnership } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
+                        };
+                        canvas.stage.once("pointerdown", interactionHandler);
+                    }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                }, default: "summon"
+            }).render(true);
+        }
+
+        else if ($btn.hasClass('perfected-spawn-btn')) {
+            e.preventDefault(); e.stopPropagation();
+            const masterActor = game.actors.get($btn.attr("data-master-id")) || game.user.character || canvas.tokens.controlled[0]?.actor;
+            if (!masterActor) return ui.notifications.warn("Necromancer not found. Please select your character.");
+            if (!game.user.isGM && !masterActor.isOwner) return ui.notifications.warn("You lack permission to command this Necromancer.");
+            if (globalThis.NecroThrallHelper?.executeSheddingMatrix) globalThis.NecroThrallHelper.executeSheddingMatrix(masterActor, 4);
+            else ui.notifications.warn("Command Deck must be open to process rapid shedding.");
+        }
+
+        else if ($btn.hasClass('tsunami-limb-btn')) {
+            e.preventDefault(); e.stopPropagation();
+            const targetsData = message.flags?.["aoe-easy-resolve"]?.targets || {}, targetIds = Object.keys(targetsData);
+            if (targetIds.length === 0) return ui.notifications.warn("Please wait for the cone template to register targets in the chat card!");
+            const availableThralls = targetIds.map(id => canvas.tokens.get(id)).filter(t => t?.document.getFlag("necromancer-thrall-helper", "masterId") === casterId);
+            if (availableThralls.length === 0) return ui.notifications.warn("No secondary thrall found inside the cone to sacrifice.");
+            const consume = async (sacrificedThrall) => {
+                if (!sacrificedThrall) return;
+                await message.update({ "flags.necromancer-thrall-helper.limbsActivated": true, "flags.necromancer-thrall-helper.sacrificedThrallId": sacrificedThrall.id, [`flags.aoe-easy-resolve.targets.-=${sacrificedThrall.id}`]: null });
+                await sacrificedThrall.document.delete();
+                await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: game.actors.get(casterId) }), flavor: `<strong>Grasping Limbs Activated!</strong>`, content: `<p><b>${sacrificedThrall.name}</b> dissolves into the fleshy wave! Enemies in the cone must now succeed at a Fortitude save or become Immobilized.</p>` });
+            };
+            if (availableThralls.length === 1) consume(availableThralls[0]);
+            else {
+                new Dialog({
+                    title: "Select Sacrifice", content: `<p>Multiple thralls detected in the wave. Which one is melted into grasping limbs?</p><form><div class="form-group"><label>Target:</label><select id="thrall-choice">${availableThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("")}</select></div></form>`,
+                    buttons: { consume: { icon: '<i class="fas fa-hand-paper"></i>', label: "Melt", callback: d => consume(availableThralls.find(t => t.id === d[0].querySelector('#thrall-choice').value)) }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "consume"
+                }).render(true);
             }
         }
 
-        if (originName.includes("Dread Mosquito")) {
-            const aoeFlags = msg?.flags?.["aoe-easy-resolve"] || payload.originItem?.flags?.["aoe-easy-resolve"] || {};
-            const saveDC = aoeFlags.saveDC || 10;
-            const casterId = payload.originItem?.actor?.id || payload.caster?.id || "";
-
-            for (let [tokenId, targetData] of Object.entries(payload.targets)) {
-                if (targetData.hasApplied) continue;
-                const token = canvas.tokens.get(tokenId);
-                if (!token?.actor) continue;
-
-                const dos = targetData.degreeOfSuccess;
-                if (!dos) continue;
-
-                const chosenType = msg?.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-                const negHeal = token.actor.system.attributes.hp?.negativeHealing || false;
-                const isImmuneToSwarm = (chosenType === 'vitality' && !negHeal) || (chosenType === 'void' && negHeal) || targetData.isImmune;
-
-         
-                const hasDisease = token.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
-                if (hasDisease) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: "" }, img: "icons/magic/water/blood-drop-skull.webp", content: `<div style="text-align: right; padding-right: 5px; font-size: 0.9em;"><i class="fas fa-level-up-alt fa-rotate-90" style="color: #555; margin-right: 4px;"></i> <span style="color: #888; font-weight: bold;">Already Infected!</span></div>`, saveNote: "Infected" });
-                    targetData.hasApplied = true;
-                    continue; 
-                }
-
-                if (dos === "criticalSuccess" || isImmuneToSwarm) {
-                    window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: token.name }, img: token.document?.texture?.src, content: `<span style="color: #4ade80; font-weight: bold;">Evades the plague!</span>`, saveNote: isImmuneToSwarm ? "Immune" : "Crit Success" });
-                    targetData.hasApplied = true;
-                    continue;
-                }
-
-                const stage = (dos === "criticalFailure") ? 2 : 1;
-                const durationRounds = (dos === "success") ? 1 : 6;
-                const weaknessVal = stage === 3 ? 20 : stage * 5;
-
-                const receiptText = `<div style="text-align: right; padding-right: 5px; font-size: 0.9em;"><i class="fas fa-level-up-alt fa-rotate-90" style="color: #555; margin-right: 4px;"></i> <span style="color: ${dos === 'success' ? '#eab308' : '#ef4444'}; font-weight: bold;">Plagued! (Stage ${stage})</span></div>`;
-
-                window.aoeEasyResolveApplying?.receipt.push({ tokenId: tokenId, speaker: { alias: "" }, img: "icons/magic/water/blood-drop-skull.webp", content: receiptText, saveNote: `Stage ${stage}` });
-
-                let diseaseAttempts = 0;
-                const applyDisease = async () => {
-                    try {
-                        let currentSickened = token.actor.getCondition("sickened")?.value || 0;
-                        if (currentSickened < stage) {
-                            await token.actor.increaseCondition("sickened");
-                        }
-                        
-                        const hasEffect = token.actor.items.some(i => i.system?.slug === "effect-necrotic-blood");
-                        if (!hasEffect) {
-                            const effectData = {
-                                name: "Effect: Necrotic Blood", type: "effect", img: "icons/magic/water/blood-drop-skull.webp",
-                                system: {
-                                    slug: "effect-necrotic-blood", level: { value: 18 }, 
-                                    duration: { value: durationRounds, unit: "rounds", expiry: "turn-end" },
-                                    description: { value: `<b>Necrotic Blood (Stage ${stage})</b><br>Stage 1: 3d10 ${chosenType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${chosenType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${chosenType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>` },
-                                    rules: [{ key: "Weakness", type: "bleed", value: weaknessVal }]
-                                },
-                                flags: { "necromancer-thrall-helper": { isNecroticBlood: true, masterId: casterId, dmgType: chosenType, necroticBloodDC: saveDC, stage: stage } }
-                            };
-                            await token.actor.createEmbeddedDocuments("Item", [effectData]);
-                        }
-                    } catch(e) {
-                        if (diseaseAttempts < 20) {
-                            diseaseAttempts++;
-                            setTimeout(applyDisease, 100);
-                        } else {
-                            console.error("Necromancer Helper | Disease DB lock timeout:", e);
-                        }
-                    }
-                };
-                applyDisease();
-
-                targetData.hasApplied = true;
+        else if ($btn.hasClass('bone-armor-btn')) {
+            e.preventDefault(); e.stopPropagation();
+            const targetIds = Object.keys(message.flags?.["aoe-easy-resolve"]?.targets || {});
+            if (targetIds.length === 0) return ui.notifications.warn("Please wait for the cone template to register targets in the chat card!");
+            const availableThralls = targetIds.map(id => canvas.tokens.get(id)).filter(t => t?.document.getFlag("necromancer-thrall-helper", "masterId") === casterId);
+            if (availableThralls.length === 0) return ui.notifications.warn("No secondary thrall found strictly inside the cone to sacrifice.");
+            const consume = async (sacrificedThrall) => {
+                if (!sacrificedThrall) return;
+                let updates = { "flags.necromancer-thrall-helper.boneArmorActivated": true, "flags.necromancer-thrall-helper.sacrificedThrallId": sacrificedThrall.id, "flags.necromancer-thrall-helper.applyArmorEffects": true, [`flags.aoe-easy-resolve.targets.-=${sacrificedThrall.id}`]: null };
+                targetIds.filter(id => id !== sacrificedThrall.id).forEach(id => {
+                    const token = canvas.tokens.get(id);
+                    if (token?.actor && (token.actor.system?.details?.alliance === "party" || token.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY || token.actor.id === casterId || token.document.getFlag("necromancer-thrall-helper", "masterId") === casterId)) updates[`flags.aoe-easy-resolve.targets.${id}.isImmune`] = true;
+                });
+                await message.update(updates);
+                await sacrificedThrall.document.delete();
+                await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: game.actors.get(casterId) }), flavor: `<strong>Bone Armor Activated!</strong>`, content: `<p><b>${sacrificedThrall.name}</b> is consumed by the barrage! Allies in the blast zone take no damage and gain a +1 status bonus to AC until the start of the caster's next turn.</p>` });
+            };
+            if (availableThralls.length === 1) consume(availableThralls[0]);
+            else {
+                new Dialog({
+                    title: "Select Sacrifice", content: `<p>Multiple thralls detected in the blast zone. Which one is becoming armor?</p><form><div class="form-group"><label>Target:</label><select id="thrall-choice">${availableThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("")}</select></div></form>`,
+                    buttons: { consume: { icon: '<i class="fas fa-shield-alt"></i>', label: "Consume", callback: d => consume(availableThralls.find(t => t.id === d[0].querySelector('#thrall-choice').value)) }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "consume"
+                }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
             }
         }
-
-        return payload;
-    }, 999);
+    });
 });
 
 
@@ -1877,11 +1673,21 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
 
     const injectToggle = ($r, htmlString) => {
         const $saveContainer = $r.find('.save-btn-container, .roll-save-btn').first();
-        if ($saveContainer.length > 0) $saveContainer.before(htmlString);
-        else {
-            const $img = $r.find('img').first();
-            if ($img.length > 0) $img.parent().append(htmlString);
-            else $r.find('.token-name, span[title]').first().after(htmlString);
+        if ($saveContainer.length > 0) {
+            $saveContainer.before(htmlString);
+        } else {
+            let targetNode = null;
+            $r.find('*').addBack().contents().each(function() {
+                if (this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing" || this.nodeValue.trim() === "Missed")) {
+                    targetNode = this;
+                }
+            });
+            if (targetNode) $(targetNode).before(htmlString);
+            else {
+                const $img = $r.find('img').first();
+                if ($img.length > 0) $img.parent().append(htmlString);
+                else $r.append(htmlString);
+            }
         }
     };
 
@@ -1895,110 +1701,97 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
     }
 
     if (isDesperateCard || isErasCard || isMosquitoCard) {
-        if (isDesperateCard) {
-            const hasMastery = actor?.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death");
-            if (!hasMastery) return;
-        }
-
-        if ($row.find('.necro-type-toggle').length > 0) return;
+        if (isDesperateCard && !actor?.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death")) return;
 
         const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
+        
+        if ($row.find('.necro-type-toggle').length === 0) {
+            const cursorStyle = hasPermission ? 'pointer' : 'default';
+            const getBg = (type) => currentType === type ? (type === 'void' ? '#660066' : '#b58900') : '#222';
+            const getColor = (type) => currentType === type ? '#fff' : '#999';
+
+            const toggleHtml = `
+                <div class="necro-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
+                    <button type="button" class="necro-type-btn void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
+                    <button type="button" class="necro-type-btn vit-opt" data-type="vitality" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vitality')}; color: ${getColor('vitality')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Vit</button>
+                </div>
+            `;
+            injectToggle($row, toggleHtml);
+        }
+
         const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
         const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
-
-        const cursorStyle = hasPermission ? 'pointer' : 'default';
-        const getBg = (type) => currentType === type ? (type === 'void' ? '#660066' : '#b58900') : '#222';
-        const getColor = (type) => currentType === type ? '#fff' : '#999';
-
-        const toggleHtml = `
-            <div class="necro-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
-                <button type="button" class="necro-type-btn void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
-                <button type="button" class="necro-type-btn vit-opt" data-type="vitality" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vitality')}; color: ${getColor('vitality')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Vit</button>
-            </div>
-        `;
-        
-        injectToggle($row, toggleHtml);
-
-        const $saveBtn = $row.find('.roll-save-btn');
-        const $healBadge = $row.find('span:contains("Healing")');
-        
         const hasDisease = isMosquitoCard && targetToken.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
 
-        if (isUnaffected) {
+        const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
+        const $healBadge = $row.find('span:contains("Healing")');
+        const $toggle = $row.find('.necro-type-toggle');
+        
+        if (isUnaffected || hasDisease) {
             $saveBtn.hide();
             $healBadge.hide();
-            if ($row.find('.no-save-badge').length === 0) $saveBtn.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
-        } else if (hasDisease) {
-            $saveBtn.hide();
-            $healBadge.hide();
-            if ($row.find('.no-save-badge').length === 0) $saveBtn.after('<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.75em; margin-left: 5px;">(Already Infected)</span>');
+            $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
+            
+            if (isUnaffected && $row.find('.no-save-badge').length === 0) {
+                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
+            } else if (hasDisease && $row.find('.no-save-badge').length === 0) {
+                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.75em; margin-left: 5px;">(Already Infected)</span>');
+            }
         } else {
             $saveBtn.show();
             $healBadge.hide(); 
             $row.find('.no-save-badge').remove();
         }
-
-        if (hasPermission) {
-            $row.find('.necro-type-btn').off('click').on('click', async (e) => {
-                e.preventDefault(); e.stopPropagation();
-                const $btn = $(e.currentTarget);
-                await message.setFlag("necromancer-thrall-helper", `dmgType_${tokenId}`, $btn.attr('data-type'));
-            });
-        }
     }
 
-    // --- INVERT HARM ---
     if (isHarmCard) {
         if (!actor) return;
         const hasMastery = actor.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death");
         const hasInvert = actor.items.some(i => i.name === "Invert Harm" || i.slug === "invert-harm");
         if (!hasMastery && !hasInvert) return;
-        if ($row.find('.harm-type-toggle').length > 0) return;
 
         const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
-        const cursorStyle = hasPermission ? 'pointer' : 'default';
+        
+        if ($row.find('.harm-type-toggle').length === 0) {
+            const cursorStyle = hasPermission ? 'pointer' : 'default';
+            const getBg = (type) => currentState === type ? (type === 'void' ? '#660066' : type === 'vit' ? '#b58900' : '#4ade80') : '#222';
+            const getColor = (type) => currentState === type && type === 'heal' ? '#000' : (currentState === type ? '#fff' : '#999');
 
-        const getBg = (type) => currentState === type ? (type === 'void' ? '#660066' : type === 'vit' ? '#b58900' : '#4ade80') : '#222';
-        const getColor = (type) => currentState === type && type === 'heal' ? '#000' : (currentState === type ? '#fff' : '#999');
+            const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt" data-type="vit" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vit')}; color: ${getColor('vit')}; border: 1px solid #444; border-radius: ${hasInvert ? '0' : '0 3px 3px 0'};">Vit</button>` : '';
+            const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt" data-type="heal" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('heal')}; color: ${getColor('heal')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Heal</button>` : '';
 
-        const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt" data-type="vit" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vit')}; color: ${getColor('vit')}; border: 1px solid #444; border-radius: ${hasInvert ? '0' : '0 3px 3px 0'};">Vit</button>` : '';
-        const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt" data-type="heal" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('heal')}; color: ${getColor('heal')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Heal</button>` : '';
-
-        const toggleHtml = `
-            <div class="harm-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
-                <button type="button" class="harm-type-btn harm-void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
-                ${vitButton}
-                ${healButton}
-            </div>
-        `;
-
-        injectToggle($row, toggleHtml);
+            const toggleHtml = `
+                <div class="harm-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
+                    <button type="button" class="harm-type-btn harm-void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
+                    ${vitButton}
+                    ${healButton}
+                </div>
+            `;
+            injectToggle($row, toggleHtml);
+        }
 
         const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-        let isHealing = false;
-        if (currentState === "void") isHealing = negHeal;
-        if (currentState === "vit") isHealing = !negHeal;
-        if (currentState === "heal") isHealing = true;
+        let isHealing = (currentState === "void" && negHeal) || currentState === "heal";
+        let isUnaffected = (currentState === "vit" && !negHeal);
 
-        const $saveBtn = $row.find('.roll-save-btn');
+        const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
         const $nativeHealBadge = $row.find('span:contains("Healing")');
+        const $toggle = $row.find('.harm-type-toggle');
 
-        if (isHealing) {
+        if (isHealing || isUnaffected) {
             $saveBtn.hide();
             $nativeHealBadge.hide();
-            if ($row.find('.aoe-heal-badge').length === 0) $saveBtn.after('<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(AoE Heal)</span>');
+            $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
+            
+            if (isHealing && $row.find('.aoe-heal-badge').length === 0) {
+                $toggle.after('<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(AoE Heal)</span>');
+            } else if (isUnaffected && $row.find('.no-save-badge').length === 0) {
+                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
+            }
         } else {
             $saveBtn.show();
             $nativeHealBadge.hide();
-            $row.find('.aoe-heal-badge').remove();
-        }
-
-        if (hasPermission) {
-            $row.find('.harm-type-btn').off('click').on('click', async (e) => {
-                e.preventDefault(); e.stopPropagation();
-                const $btn = $(e.currentTarget);
-                await message.setFlag("necromancer-thrall-helper", `harmState_${tokenId}`, $btn.attr('data-type'));
-            });
+            $row.find('.aoe-heal-badge, .no-save-badge').remove();
         }
     }
 });
@@ -2115,1056 +1908,6 @@ globalThis.NecroThrallHelper.handleBloodPoolTrigger = async (regionDoc, tokenObj
 };
 
 
-
-
-Hooks.on("createChatMessage", async (message) => {
-    if (message.author?.id !== game.user.id) return;
-    
-    const pf2eFlags = message.flags?.pf2e || {};
-    const context = pf2eFlags.context || {};
-    if (context.type !== "damage-roll") return;
-
-    const rollOptions = context.options || [];
-    const hasDrainingStrike = rollOptions.some(o => o === "draining-strike" || o.startsWith("draining-strike:"));
-    if (!hasDrainingStrike) return;
-
-    const actorId = message.speaker?.actor;
-    const actor = game.actors.get(actorId);
-    if (!actor) return;
-
-    let requiredThralls = 1;
-    const dsFeat = actor.items.find(i => i.slug === "draining-strike" || i.name === "Draining Strike");
-    
-    if (dsFeat) {
-        const selection = dsFeat.flags?.pf2e?.rulesSelections?.drainingStrike || dsFeat.flags?.pf2e?.rulesSelections?.["draining-strike"];
-        if (selection) {
-            requiredThralls = parseInt(selection, 10) || 1;
-        }
-    }
-
-    let rawSpiritDamage = 0;
-    if (message.rolls && message.rolls.length > 0) {
-        const roll = message.rolls[0];
-        if (roll.instances) {
-            roll.instances.forEach(inst => {
-                if (inst.type === "spirit") {
-                    rawSpiritDamage += (inst.total ?? inst._total ?? 0);
-                }
-            });
-        }
-    }
-
-    if (rawSpiritDamage === 0) return;
-
-    let targetTokenId = context.target?.token; 
-    let targetToken = canvas.tokens.get(targetTokenId);
-    if (!targetToken && game.user.targets.size > 0) {
-        targetToken = Array.from(game.user.targets)[0];
-    }
-
-    let spiritHeal = rawSpiritDamage;
-
-    if (targetToken && targetToken.actor) {
-        const attrs = targetToken.actor.system.attributes;
-        const immunities = attrs.immunities || [];
-        const resistances = attrs.resistances || [];
-        const weaknesses = attrs.weaknesses || [];
-
-        const isImmune = immunities.some(i => i.type === "spirit" || i.type === "all-damage");
-        
-        if (isImmune) {
-            spiritHeal = 0;
-        } else {
-            const weakness = weaknesses.find(w => w.type === "spirit" || w.type === "all-damage")?.value || 0;
-            const resistance = resistances.find(r => r.type === "spirit" || r.type === "all-damage")?.value || 0;
-            
-            spiritHeal = Math.max(0, spiritHeal + weakness - resistance);
-        }
-    }
-
-    if (spiritHeal === 0) {
-        return ui.notifications.info("Draining Strike hit, but the target resisted all Spirit damage. No healing granted.");
-    }
-
-    let necroToken = canvas.tokens.get(message.speaker?.token) || actor.getActiveTokens()[0];
-    const gridDist = canvas.scene?.grid?.distance || 5;
-
-    const availableThralls = canvas.tokens.placeables.filter(t => {
-        if (t.document.getFlag("necromancer-thrall-helper", "masterId") !== actor.id) return false;
-
-        let distToNecro = 999;
-        let distToTarget = 999;
-
-        if (necroToken) {
-            const dx = Math.abs(necroToken.x - t.x);
-            const dy = Math.abs(necroToken.y - t.y);
-            distToNecro = (Math.max(dx, dy) / canvas.grid.size) * gridDist;
-        }
-
-        if (targetToken) {
-            const dx = Math.abs(targetToken.x - t.x);
-            const dy = Math.abs(targetToken.y - t.y);
-            distToTarget = (Math.max(dx, dy) / canvas.grid.size) * gridDist;
-        }
-
-        return distToNecro <= 10 || distToTarget <= 10;
-    });
-
-    if (availableThralls.length < requiredThralls) {
-        return ui.notifications.error(`Draining Strike requires ${requiredThralls} thrall(s) within 10ft of you or the target, but only found ${availableThralls.length}.`);
-    }
-
-    let checkboxes = "";
-    availableThralls.forEach((t, index) => {
-        checkboxes += `<div style="display: flex; align-items: center; margin-bottom: 5px;">
-            <input type="checkbox" id="drain-thrall-${index}" value="${t.id}" class="drain-checkbox" style="margin-right: 10px;">
-            <label for="drain-thrall-${index}" style="display: flex; align-items: center; cursor: pointer;">
-                <img src="${t.document.texture?.src || "icons/svg/mystery-man.svg"}" width="30" height="30" style="border: none; margin-right: 10px; border-radius: 4px; object-fit: cover;">
-                ${t.name}
-            </label>
-        </div>`;
-    });
-
-    const formHtml = `
-        <form id="drain-form" style="margin-bottom: 10px;">
-            <p>Select <b>${requiredThralls}</b> thrall(s) to destroy to siphon their essence.</p>
-            <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80; margin-bottom: 10px;">
-                <p style="margin: 0; font-size: 0.9em;">Raw Spirit Damage: <b>${rawSpiritDamage}</b></p>
-                <p style="margin: 0; font-size: 0.9em;">Post-Mitigation Healing: <b>${spiritHeal} HP</b></p>
-            </div>
-            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #333; padding: 5px; background: rgba(0,0,0,0.2); border-radius: 4px;">
-                ${checkboxes}
-            </div>
-        </form>
-    `;
-
-    new Dialog({
-        title: "Draining Strike",
-        content: formHtml,
-        buttons: {
-            drain: {
-                icon: '<i class="fas fa-heart-broken"></i>',
-                label: "Drain",
-                callback: async (dialogHtml) => {
-                    const selectedIds = [];
-                    dialogHtml.find('.drain-checkbox:checked').each((i, cb) => selectedIds.push(cb.value));
-
-                    if (selectedIds.length !== requiredThralls) {
-                        return ui.notifications.warn(`You must select exactly ${requiredThralls} thrall(s). Action aborted.`);
-                    }
-
-                    const tokensToDelete = selectedIds.map(id => canvas.tokens.get(id));
-                    const names = tokensToDelete.map(t => t.name).join(", ");
-                    for (const t of tokensToDelete) await t.document.delete();
-
-                    const currentHP = actor.system.attributes.hp.value;
-                    const maxHP = actor.system.attributes.hp.max;
-                    const actualHealed = Math.min(maxHP - currentHP, spiritHeal);
-                    
-                    await actor.update({ "system.attributes.hp.value": currentHP + actualHealed });
-
-                    if (actualHealed > 0 && canvas.ready && necroToken) {
-                        canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP`, { anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP });
-                    }
-
-                    await ChatMessage.create({
-                        speaker: ChatMessage.getSpeaker({ actor: actor }),
-                        flavor: `<strong>Draining Strike</strong>`,
-                        content: `<p><b>${actor.name}</b> destroys <b>${names}</b>, funneling their stolen vitality to recover <b>${actualHealed} HP</b>!</p>`
-                    });
-                }
-            },
-            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-        },
-        default: "drain",
-        render: (dialogHtml) => {
-            dialogHtml.find('.drain-checkbox').on('change', function() {
-                const checkedCount = dialogHtml.find('.drain-checkbox:checked').length;
-                if (checkedCount > requiredThralls) {
-                    this.checked = false;
-                    ui.notifications.warn(`You only need to sacrifice ${requiredThralls} thrall(s).`);
-                }
-            });
-        }
-    }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
-});
-Hooks.on("renderChatMessage", (message, html) => {
-    const $html = html instanceof jQuery ? html : $(html);
-    
-    $html.find('.gore-spawn-btn').off('click').on('click', async (e) => {
-        e.preventDefault();
-        const $btn = $(e.currentTarget);
-        const count = parseInt($btn.attr('data-count'), 10);
-        const targetId = $btn.attr('data-target-id');
-        const targetToken = canvas.tokens.get(targetId);
-        const targetName = targetToken ? targetToken.name : "the field";
-        
-        const attacker = game.user.character || canvas.tokens.controlled[0]?.actor;
-        if (!attacker) return ui.notifications.warn("No Necromancer found to command the thralls!");
-
-        const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
-        if (presets.length === 0) return ui.notifications.warn("No thrall presets found.");
-
-        let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
-        presets.forEach(p => {
-            const isAlreadyActive = canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name);
-            if (p.isUnique && isAlreadyActive) {
-                optionsHtml += `<option value="${p.id}" disabled>${p.name} (Already Active)</option>`;
-            } else {
-                optionsHtml += `<option value="${p.id}">${p.name}</option>`;
-            }
-        });
-
-        let formHtml = `<form><p>Select the identities for the <b>${count}</b> new thrall(s) spawned near <b>${targetName}</b>:</p>`;
-        for (let i = 0; i < count; i++) {
-            formHtml += `
-                <div class="form-group">
-                    <label>Thrall ${i + 1}:</label>
-                    <div class="form-fields">
-                        <select id="gore-preset-${i}">${optionsHtml}</select>
-                    </div>
-                </div>`;
-        }
-        formHtml += `</form>`;
-
-        new Dialog({
-            title: "Blood-Born Thralls",
-            content: formHtml,
-            buttons: {
-                summon: {
-                    icon: '<i class="fas fa-ghost"></i>',
-                    label: "Sprout",
-                    callback: async (dialogHtml) => {
-                        const dialogForm = dialogHtml[0];
-                        let selections = [];
-                        let selectedUnique = new Set();
-
-                        for (let i = 0; i < count; i++) {
-                            const val = dialogForm.querySelector(`#gore-preset-${i}`).value;
-                            const preset = presets.find(p => p.id === val);
-                            
-                            if (preset && preset.isUnique) {
-                                if (selectedUnique.has(val)) {
-                                    ui.notifications.error(`${preset.name} is unique and cannot be summoned multiple times.`);
-                                    return; 
-                                }
-                                selectedUnique.add(val);
-                            }
-                            selections.push(val);
-                        }
-
-                        let currentSpawnIndex = 0;
-
-                        ui.notifications.info(`Click the canvas to sprout Thrall ${currentSpawnIndex + 1} adjacent to the field. Right-click to cancel.`);
-                        document.body.style.cursor = "crosshair";
-                        canvas.app.view.style.cursor = "crosshair";
-
-                        const ghost = new PIXI.Graphics();
-                        ghost.beginFill(0xcc0000, 0.4);
-                        ghost.lineStyle(2, 0xff0000, 0.8);
-                        ghost.drawRect(0, 0, canvas.grid.size, canvas.grid.size);
-                        ghost.endFill();
-                        ghost.zIndex = 1000;
-                        ghost.position.set(-1000, -1000);
-                        canvas.tokens.addChild(ghost);
-
-                        const updateGhost = (event) => {
-                            const position = event.data.getLocalPosition(canvas.app.stage);
-                            let spawnX = position.x;
-                            let spawnY = position.y;
-                            if (canvas.grid.getTopLeftPoint) {
-                                const snapped = canvas.grid.getTopLeftPoint(position);
-                                spawnX = snapped.x; 
-                                spawnY = snapped.y;
-                            }
-                            ghost.position.set(spawnX, spawnY);
-                        };
-
-                        canvas.stage.on("pointermove", updateGhost);
-
-                        const cleanUp = () => {
-                            document.body.style.cursor = "";
-                            canvas.app.view.style.cursor = "";
-                            canvas.stage.off("pointermove", updateGhost);
-                            ghost.destroy();
-                        };
-
-                        const interactionHandler = async (event) => {
-                            if (event.data.button !== 0 && event.data.button !== 2) {
-                                canvas.stage.once("pointerdown", interactionHandler);
-                                return;
-                            }
-
-                            if (event.data.button === 2) {
-                                ui.notifications.info("Sprouting cancelled.");
-                                cleanUp();
-                                return;
-                            }
-
-                            const position = event.data.getLocalPosition(canvas.app.stage);
-                            let spawnX = position.x;
-                            let spawnY = position.y;
-                            if (canvas.grid.getTopLeftPoint) {
-                                const snapped = canvas.grid.getTopLeftPoint(position);
-                                spawnX = snapped.x; 
-                                spawnY = snapped.y;
-                            }
-
-                            const presetId = selections[currentSpawnIndex];
-                            
-                            const basePayload = await prepareThrallPayload(attacker, presetId);
-                            if (!basePayload) { cleanUp(); return; }
-
-                            const finalPayload = foundry.utils.mergeObject(basePayload, {
-                                x: spawnX,
-                                y: spawnY,
-                                delta: { ownership: { [game.user.id]: 3 } }
-                            });
-
-                            currentSpawnIndex++;
-                            executeSpawn(finalPayload).catch(err => {
-                                console.error("Necromancer Helper | Spawn execution failed:", err);
-                                ui.notifications.error("Failed to materialize the thrall.");
-                            });
-
-                            if (currentSpawnIndex < count) {
-                                ui.notifications.info(`Place Thrall ${currentSpawnIndex + 1}.`);
-                                canvas.stage.once("pointerdown", interactionHandler);
-                            } else {
-                                cleanUp();
-                                $btn.remove(); 
-                                ui.notifications.info("All blood thralls sprouted.");
-                            }
-                        };
-
-                        canvas.stage.once("pointerdown", interactionHandler);
-                    }
-                },
-                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-            },
-            default: "summon"
-        }).render(true);
-    });
-});
-Hooks.on("renderChatMessage", (message, html) => {
-    const $html = html instanceof jQuery ? html : $(html);
-
-    $html.find(".desperate-revival-trigger-btn").off("click").on("click", async (e) => {
-        e.preventDefault();
-        const $btn = $(e.currentTarget);
-        const necroId = $btn.attr("data-necro-id");
-        const necroActor = game.actors.get(necroId);
-        if (!necroActor) return;
-
-        const necroTokens = necroActor.getActiveTokens();
-        if (necroTokens.length === 0) return ui.notifications.warn("Necromancer token not found on the canvas.");
-        const necroToken = necroTokens[0];
-
-        const preWounded = necroActor.getCondition?.("wounded")?.value || 0;
-
-        await necroActor.update({ "system.attributes.hp.value": 1 });
-        await necroActor.setFlag("necromancer-thrall-helper", "desperateRevivalUsed", true);
-
-        const dying = necroActor.getCondition?.("dying");
-        if (dying) await dying.delete();
-        const unconscious = necroActor.getCondition?.("unconscious");
-        if (unconscious) await unconscious.delete();
-
-        for (let attempts = 0; attempts < 20; attempts++) {
-            const currentWoundedCond = necroActor.getCondition?.("wounded");
-            if ((currentWoundedCond?.value || 0) > preWounded) {
-                if (preWounded === 0) await currentWoundedCond.delete();
-                else if (typeof necroActor.decreaseCondition === "function") await necroActor.decreaseCondition("wounded");
-                break;
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        let spellDC = 10 + Math.floor((necroActor.level || 1) * 1.5);
-        if (necroActor.spellcasting) {
-            const entries = typeof necroActor.spellcasting.contents === "function" 
-                ? necroActor.spellcasting.contents() 
-                : Array.from(necroActor.spellcasting);
-            let maxDC = 0;
-            for (const entry of entries) {
-                const dcVal = entry.dc?.value || entry.statistic?.dc?.value || entry.system?.dc?.value;
-                if (dcVal && dcVal > maxDC) maxDC = dcVal;
-            }
-            if (maxDC > 0) spellDC = maxDC;
-        }
-        if (spellDC === 10 && necroActor.system?.attributes?.classDC?.dc) {
-            spellDC = necroActor.system.attributes.classDC.dc.value;
-        }
-
-        let drSpell = necroActor.items.find(i => i.type === "spell" && i.name === "Desperate Revival");
-        const spellSystemData = {
-            level: { value: 8 },
-            traits: { value: ["necromancer", "occult", "void", "healing", "uncommon"] },
-            tradition: { value: "occult" },
-            area: { type: "emanation", value: 60 },
-            defense: { save: { statistic: "fortitude", basic: false, dc: { value: spellDC } } }
-        };
-
-        if (!drSpell) {
-            const spellData = {
-                name: "Desperate Revival",
-                type: "spell",
-                img: "icons/magic/life/heart-shadow-red.webp",
-                system: spellSystemData
-            };
-            const created = await necroActor.createEmbeddedDocuments("Item", [spellData]);
-            drSpell = created[0];
-        } else {
-            await drSpell.update({ system: spellSystemData });
-        }
-
-        window.aoeEasyResolveCache = {
-            item: drSpell,
-            name: "Desperate Revival",
-            dc: spellDC,
-            type: "fortitude",
-            hazardDuration: null
-        };
-
-        const gridDist = canvas.scene?.grid?.distance || 5;
-        const tokenRadiusFeet = ((necroToken.document.width || 1) * gridDist) / 2;
-        const totalEmanationFeet = 60 + tokenRadiusFeet;
-
-        const templateData = {
-            t: "circle",
-            user: game.user.id,
-            distance: totalEmanationFeet,
-            direction: 0,
-            x: necroToken.center.x,
-            y: necroToken.center.y,
-            fillColor: "#7f1d1d",
-            flags: {
-                "necromancer-thrall-helper": { source: "desperate-revival" },
-                "aoe-easy-resolve": {
-                    useOverride: true,
-                    saveType: "fortitude",
-                    saveDC: spellDC,
-                    isAreaDamage: true,
-                    allyBaseEffect: "standard",
-                    enemyBaseEffect: "standard"
-                }
-            }
-        };
-
-        await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [templateData]);
-
-        $btn.replaceWith(`
-            <p style="margin: 0; color: #4ade80; font-weight: bold; text-align: center;">
-                <i class="fas fa-check"></i> Desperate Revival Unleashed! (1 HP)
-            </p>
-        `);
-    });
-
-    const pf2eContext = message.flags?.pf2e?.context;
-    if (pf2eContext?.type === "attack-roll" && pf2eContext?.outcome === "criticalSuccess") {
-        const attackerTokenId = message.speaker?.token;
-        const attackerToken = canvas?.tokens?.get(attackerTokenId);
-        const attacker = attackerToken?.actor || game.actors.get(message.speaker?.actor);
-        const targetId = pf2eContext.target?.token || "";
-
-        if (attacker && attacker.items.some(i => i.name === "Effect: Bind Heroic Spirit")) {
-            if ($html.find('.heroic-spawn-btn').length === 0) {
-                const btnHtml = `
-                    <button type="button" class="heroic-spawn-btn" data-target-id="${targetId}" style="background: #4a3600; color: #ffcc00; font-weight: bold; border: 1px solid #ffcc00; margin-top: 5px;">
-                        <i class="fas fa-ghost"></i> Inspire Heroic Thrall
-                    </button>
-                `;
-                $html.find('.message-content').append(btnHtml);
-
-                $html.find('.heroic-spawn-btn').off('click').on('click', async (e) => {
-                    e.preventDefault();
-                    if (!game.user.isGM && !attackerToken?.isOwner) return;
-
-                    const targetToken = canvas.tokens.get(targetId);
-                    const targetName = targetToken ? targetToken.name : "the target";
-                    
-                    const presets = typeof getThrallPresets === "function" ? getThrallPresets(attacker) : [];
-                    let optionsHtml = '<option value="default">(Default Thrall)</option><option value="random">(Random Family Member)</option>';
-                    presets.forEach(p => {
-                        const isAlreadyActive = canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name);
-                        if (p.isUnique && isAlreadyActive) {
-                            optionsHtml += `<option value="${p.id}" disabled>${p.name} (Already Active)</option>`;
-                        } else {
-                            optionsHtml += `<option value="${p.id}">${p.name}</option>`;
-                        }
-                    });
-
-                    new Dialog({
-                        title: "Inspire Heroic Thrall",
-                        content: `
-                            <p>Your critical strike calls a spirit to the battlefield!</p>
-                            <p>Select an identity to spawn adjacent to <b>${targetName}</b>:</p>
-                            <form><div class="form-group"><select id="heroic-preset">${optionsHtml}</select></div></form>
-                        `,
-                        buttons: {
-                            summon: {
-                                icon: '<i class="fas fa-magic"></i>',
-                                label: "Inspire",
-                                callback: async (dialogHtml) => {
-                                    const presetId = dialogHtml.find('#heroic-preset').val();
-                                    
-                                    ui.notifications.info(`Click the canvas adjacent to ${targetName} to place the thrall. Right-click to cancel.`);
-                                    document.body.style.cursor = "crosshair";
-                                    canvas.app.view.style.cursor = "crosshair";
-
-                                    const gridSize = canvas.grid.size;
-                                    const ghost = new PIXI.Graphics();
-                                    ghost.beginFill(0xffcc00, 0.3);
-                                    ghost.lineStyle(2, 0xffcc00, 0.8);
-                                    ghost.drawRect(0, 0, gridSize, gridSize);
-                                    ghost.endFill();
-                                    ghost.zIndex = 1000;
-                                    ghost.position.set(-1000, -1000);
-                                    canvas.tokens.addChild(ghost);
-
-                                    const updateGhost = (event) => {
-                                        const position = event.data.getLocalPosition(canvas.app.stage);
-                                        let spawnX = position.x;
-                                        let spawnY = position.y;
-                                        if (canvas.grid.getTopLeftPoint) {
-                                            const snapped = canvas.grid.getTopLeftPoint(position);
-                                            spawnX = snapped.x; 
-                                            spawnY = snapped.y;
-                                        }
-                                        ghost.position.set(spawnX, spawnY);
-                                    };
-
-                                    canvas.stage.on("pointermove", updateGhost);
-
-                                    const cleanUp = () => {
-                                        document.body.style.cursor = "";
-                                        canvas.app.view.style.cursor = "";
-                                        canvas.stage.off("pointermove", updateGhost);
-                                        ghost.destroy();
-                                    };
-
-                                    const interactionHandler = async (event) => {
-                                        if (event.data.button !== 0 && event.data.button !== 2) {
-                                            canvas.stage.once("pointerdown", interactionHandler);
-                                            return;
-                                        }
-                                        if (event.data.button === 2) {
-                                            ui.notifications.info("Inspiration cancelled.");
-                                            cleanUp();
-                                            return;
-                                        }
-
-                                        const position = event.data.getLocalPosition(canvas.app.stage);
-                                        let spawnX = position.x;
-                                        let spawnY = position.y;
-                                        if (canvas.grid.getTopLeftPoint) {
-                                            const snapped = canvas.grid.getTopLeftPoint(position);
-                                            spawnX = snapped.x; 
-                                            spawnY = snapped.y;
-                                        }
-
-                                        if (targetToken) {
-                                            const tCX = targetToken.x + (targetToken.document.width * gridSize) / 2;
-                                            const tCY = targetToken.y + (targetToken.document.height * gridSize) / 2;
-                                            const sCX = spawnX + (gridSize / 2);
-                                            const sCY = spawnY + (gridSize / 2);
-                                            const dist = (Math.max(Math.abs(tCX - sCX), Math.abs(tCY - sCY)) / gridSize) * (canvas.scene?.grid?.distance || 5);
-                                            
-                                            if (dist > 15) {
-                                                ui.notifications.warn("The inspired thrall must be placed adjacent to the target of the critical strike!");
-                                                canvas.stage.once("pointerdown", interactionHandler);
-                                                return;
-                                            }
-                                        }
-
-                                        cleanUp();
-
-                                        const basePayload = await prepareThrallPayload(attacker, presetId);
-                                        if (!basePayload) return;
-
-                                        const ownerIds = Object.keys(attacker.ownership || {}).filter(k => attacker.ownership[k] === 3 && k !== "default");
-                                        const newOwnership = { default: 0 };
-                                        ownerIds.forEach(id => newOwnership[id] = 3);
-                                        newOwnership[game.user.id] = 3;
-
-                                        const finalPayload = foundry.utils.mergeObject(basePayload, {
-                                            actorLink: false,
-                                            x: spawnX,
-                                            y: spawnY,
-                                            delta: { ownership: newOwnership }
-                                        });
-
-                                        executeSpawn(finalPayload).catch(err => {
-                                            console.error("Necromancer Helper | Spawn execution failed:", err);
-                                            ui.notifications.error("Failed to materialize the thrall.");
-                                        });
-                                    };
-
-                                    canvas.stage.once("pointerdown", interactionHandler);
-                                }
-                            },
-                            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-                        },
-                        default: "summon"
-                    }).render(true);
-                });
-            }
-        }
-
-        const speakerName = message.speaker?.alias || "";
-        const isPerfectedAttacker = attackerToken?.document?.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || speakerName.includes("Perfected");
-
-        if (isPerfectedAttacker) {
-            if ($html.find('.perfected-spawn-btn').length === 0) {
-                const masterId = attackerToken?.document?.getFlag("necromancer-thrall-helper", "masterId") || attacker?.getFlag("necromancer-thrall-helper", "masterId") || game.user.character?.id || "";
-                const btnHtml = `
-                    <button type="button" class="perfected-spawn-btn" data-master-id="${masterId}" style="background: #3b0764; color: #d8b4fe; font-weight: bold; border: 1px solid #7e22ce; margin-top: 5px;">
-                        <i class="fas fa-ghost"></i> Sprout 4 Thralls
-                    </button>
-                `;
-                $html.find('.message-content').append(btnHtml);
-            }
-
-            $html.off('click', '.perfected-spawn-btn').on('click', '.perfected-spawn-btn', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-
-                const mId = e.currentTarget.dataset.masterId;
-                const masterActor = game.actors.get(mId) || game.user.character || canvas.tokens.controlled[0]?.actor;
-
-                if (!masterActor) return ui.notifications.warn("Necromancer not found. Please select your character.");
-                if (!game.user.isGM && !masterActor.isOwner) return ui.notifications.warn("You lack permission to command this Necromancer.");
-
-                if (globalThis.NecroThrallHelper?.executeSheddingMatrix) {
-                    globalThis.NecroThrallHelper.executeSheddingMatrix(masterActor, 4);
-                } else {
-                    ui.notifications.warn("Command Deck must be open to process rapid shedding.");
-                }
-            });
-        }
-    }
-    
-
-    const itemName = message.flags?.["aoe-easy-resolve"]?.itemName || message.flavor || "";
-    const msgContent = message.content || "";
-    const isResolution = msgContent.includes("Resolution Summary") || message.flags?.["aoe-easy-resolve"]?.isResolution;
-    
-    const isErasCard = (itemName.includes("Necrotic Bomb") || itemName.includes("Necrotic Blast") || msgContent.includes("Necrotic Bomb") || msgContent.includes("Necrotic Blast")) && !isResolution;
-    const isBarrageCard = (itemName.includes("Bony Barrage") || msgContent.includes("Bony Barrage")) && !isResolution;
-    const isHarmCard = (itemName.includes("Harm") || msgContent.includes("Harm")) && !isResolution;
-    const isTsunamiCard = (itemName.includes("Flesh Tsunami") || msgContent.includes("Flesh Tsunami")) && !isResolution;
-    
-    if (!isErasCard && !isBarrageCard && !isHarmCard && !isTsunamiCard) return;
-
-    let casterId = message.speaker?.actor;
-    const aoeItemUuid = message.flags?.["aoe-easy-resolve"]?.itemUuid || message.flags?.["aoe-easy-resolve"]?.originItemUuid;
-    if (!casterId && aoeItemUuid && aoeItemUuid.includes("Actor.")) {
-        const parts = aoeItemUuid.split(".");
-        const actorIdx = parts.indexOf("Actor");
-        if (actorIdx !== -1) casterId = parts[actorIdx + 1];
-    }
-    if (!casterId && canvas?.tokens?.controlled?.length > 0) {
-        casterId = canvas.tokens.controlled[0].actor?.id;
-    }
-    const isCaster = casterId ? game.actors.get(casterId)?.isOwner : false;
-    const hasPermission = game.user.isGM || message.isAuthor || isCaster;
-
-    const injectToggle = ($row, htmlString) => {
-        const $saveContainer = $row.find('.save-btn-container, .roll-save-btn').first();
-        if ($saveContainer.length > 0) {
-            $saveContainer.before(htmlString);
-        } else {
-            const $img = $row.find('img').first();
-            if ($img.length > 0) {
-                $img.parent().append(htmlString);
-            } else {
-                $row.find('.token-name, span[title]').first().after(htmlString);
-            }
-        }
-    };
-
-    if (isTsunamiCard) {
-        const hasLimbs = message.getFlag("necromancer-thrall-helper", "limbsActivated");
-        const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
-        
-        if (!hasLimbs) {
-            $html.find('.roll-all-npcs-btn, .apply-damage-btn').css("cssText", "display: none !important;");
-        } else {
-            $html.find('.roll-all-npcs-btn, .apply-damage-btn').css("cssText", "display: flex !important;");
-        }
-
-        if (hasLimbs) {
-            $html.find('[data-token-id]').each((i, el) => {
-                const $row = $(el);
-                if ($row.attr('data-token-id') === sacrificedId) $row.remove();
-            });
-            
-            if ($html.find('.tsunami-active-badge').length === 0) {
-                const aoeData = message.flags?.["aoe-easy-resolve"] || {};
-                const badgeHtml = `<div class="tsunami-active-badge" style="text-align: center; color: #ef4444; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-hands-helping"></i> Grasping Limbs Active (Escape DC ${aoeData.saveDC || 10})</div>`;
-                const targetContainer = $html.find('.card-buttons').last();
-                if (targetContainer.length > 0) targetContainer.after(badgeHtml);
-                else $html.append(badgeHtml);
-                $html.find('.tsunami-limb-btn').remove();
-            }
-        } 
-        else if (hasPermission) {
-            if ($html.find('.tsunami-limb-btn').length === 0) {
-                const btnHtml = `<button type="button" class="tsunami-limb-btn" style="margin-top: 5px; margin-bottom: 5px; width: 100%; background: #3a0000; color: #fff; border: 1px solid #ef4444; padding: 5px; font-weight: bold;"><i class="fas fa-hand-holding-water"></i> Sacrifice Thrall for Grasping Limbs</button>`;
-                const targetContainer = $html.find('.card-buttons').last();
-                
-                if (targetContainer.length > 0) targetContainer.before(btnHtml);
-                else $html.append(btnHtml);
-
-                $html.find('.tsunami-limb-btn').off('click').on('click', async (e) => {
-                    e.preventDefault(); e.stopPropagation();
-
-                    const aoeFlags = message.flags?.["aoe-easy-resolve"] || {};
-                    const targetsData = aoeFlags.targets || {};
-                    const targetIds = Object.keys(targetsData);
-                    
-                    if (targetIds.length === 0) return ui.notifications.warn("Please wait for the cone template to register targets in the chat card!");
-
-                    let availableThralls = [];
-                    for (const id of targetIds) {
-                        const token = canvas.tokens.get(id);
-                        if (token && token.document.getFlag("necromancer-thrall-helper", "masterId") === casterId) {
-                            availableThralls.push(token);
-                        }
-                    }
-
-                    if (availableThralls.length === 0) return ui.notifications.warn("No secondary thrall found inside the cone to sacrifice.");
-
-                    let sacrificedThrall = null;
-                    if (availableThralls.length === 1) {
-                        sacrificedThrall = availableThralls[0];
-                    } else {
-                        sacrificedThrall = await new Promise((resolve) => {
-                            let options = availableThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
-                            new Dialog({
-                                title: "Select Sacrifice",
-                                content: `<p>Multiple thralls detected in the wave. Which one is melted into grasping limbs?</p><form><div class="form-group"><label>Target:</label><select id="thrall-choice">${options}</select></div></form>`,
-                                buttons: {
-                                    consume: { icon: '<i class="fas fa-hand-paper"></i>', label: "Melt", callback: (dialogHtml) => {
-                                        const chosenId = dialogHtml[0].querySelector('#thrall-choice').value;
-                                        resolve(availableThralls.find(t => t.id === chosenId));
-                                    }},
-                                    cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel", callback: () => resolve(null) }
-                                }, default: "consume"
-                            }).render(true);
-                        });
-                    }
-
-                    if (!sacrificedThrall) return;
-
-                    const updates = {
-                        "flags.necromancer-thrall-helper.limbsActivated": true,
-                        "flags.necromancer-thrall-helper.sacrificedThrallId": sacrificedThrall.id
-                    };
-                    updates[`flags.aoe-easy-resolve.targets.-=${sacrificedThrall.id}`] = null; 
-
-                    await message.update(updates);
-                    await sacrificedThrall.document.delete();
-                    
-                    await ChatMessage.create({
-                        speaker: ChatMessage.getSpeaker({ actor: game.actors.get(casterId) }),
-                        flavor: `<strong>Grasping Limbs Activated!</strong>`,
-                        content: `<p><b>${sacrificedThrall.name}</b> dissolves into the fleshy wave! Enemies in the cone must now succeed at a Fortitude save or become Immobilized.</p>`
-                    });
-                });
-            }
-        }
-    }
-
-    // --- NECROTIC BOMB INJECTION ---
-    if (isErasCard) {
-        if ($html.find('#necro-bomb-style').length === 0) {
-            $html.prepend(`
-                <style id="necro-bomb-style">
-                    .necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; }
-                    .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; }
-                    .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; }
-                    .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; }
-                    .void-opt { border-radius: 3px 0 0 3px; }
-                    .vit-opt { border-radius: 0 3px 3px 0; }
-                    .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }
-                </style>
-            `);
-        }
-
-        $html.find('[data-token-id]').each((i, el) => {
-            const $row = $(el);
-            const tokenId = $row.attr('data-token-id');
-            if (!tokenId) return;
-
-            const targetToken = canvas?.tokens?.get(tokenId);
-            if (!targetToken?.actor) return;
-
-            $row.find('.necro-type-toggle').remove();
-            $row.find('.no-save-badge').remove();
-
-            const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-            const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-            const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
-
-            const cursorStyle = hasPermission ? 'pointer' : 'default';
-            const voidActive = currentType === 'void' ? 'active' : '';
-            const vitActive = currentType === 'vitality' ? 'active' : '';
-
-            const toggleHtml = `
-                <div class="necro-type-toggle" data-token-id="${tokenId}">
-                    <button type="button" class="type-btn void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button>
-                    <button type="button" class="type-btn vit-opt ${vitActive}" data-type="vitality" style="cursor: ${cursorStyle};">Vit</button>
-                </div>
-            `;
-            
-            injectToggle($row, toggleHtml);
-
-            const $saveBtn = $row.find('.roll-save-btn');
-            if (isUnaffected) {
-                $saveBtn.hide();
-                if ($row.find('.no-save-badge').length === 0) {
-                    $saveBtn.after('<span class="no-save-badge">(Unaffected)</span>');
-                }
-            } else {
-                $saveBtn.show();
-                $row.find('.no-save-badge').remove();
-            }
-        });
-
-        if (hasPermission) {
-            $html.find('.necro-type-toggle .type-btn').off('click').on('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const $btn = $(e.currentTarget);
-                const type = $btn.attr('data-type');
-                const tokenId = $btn.closest('.necro-type-toggle').attr('data-token-id');
-                await message.setFlag("necromancer-thrall-helper", `dmgType_${tokenId}`, type);
-            });
-        }
-    }
-
-    // --- INVERT HARM INJECTION ---
-    if (isHarmCard) {
-        const actor = game.actors.get(casterId);
-        if (!actor) return;
-
-        const hasMastery = actor.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death");
-        const hasInvert = actor.items.some(i => i.name === "Invert Harm" || i.slug === "invert-harm");
-
-        if (!hasMastery && !hasInvert) return;
-
-        if ($html.find('#harm-toggle-style').length === 0) {
-            $html.prepend(`
-                <style id="harm-toggle-style">
-                    .harm-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; }
-                    .harm-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; }
-                    .harm-type-toggle button.active.harm-void-opt { background: #660066; color: #fff; border-color: #990099; }
-                    .harm-type-toggle button.active.harm-vit-opt { background: #b58900; color: #fff; border-color: #e5a900; }
-                    .harm-type-toggle button.active.harm-heal-opt { background: #4ade80; color: #000; border-color: #22c55e; }
-                    .harm-void-opt { border-radius: 3px 0 0 3px; }
-                    .harm-vit-opt { border-radius: ${hasInvert ? '0' : '0 3px 3px 0'}; }
-                    .harm-heal-opt { border-radius: 0 3px 3px 0; }
-                    .aoe-heal-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }
-                </style>
-            `);
-        }
-
-        $html.find('[data-token-id]').each((i, el) => {
-            const $row = $(el);
-            const tokenId = $row.attr('data-token-id');
-            if (!tokenId) return;
-
-            const targetToken = canvas?.tokens?.get(tokenId);
-            if (!targetToken?.actor) return;
-
-            $row.find('.harm-type-toggle').remove();
-            $row.find('.aoe-heal-badge').remove();
-
-            const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
-            const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-            
-            let isHealing = false;
-            if (currentState === "void") isHealing = negHeal;
-            if (currentState === "vit") isHealing = !negHeal;
-            if (currentState === "heal") isHealing = true;
-
-            const cursorStyle = hasPermission ? 'pointer' : 'default';
-            const voidActive = currentState === 'void' ? 'active' : '';
-            const vitActive = currentState === 'vit' ? 'active' : '';
-            const healActive = currentState === 'heal' ? 'active' : '';
-
-            const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt ${vitActive}" data-type="vit" style="cursor: ${cursorStyle};">Vit</button>` : '';
-            const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt ${healActive}" data-type="heal" style="cursor: ${cursorStyle};">Heal</button>` : '';
-
-            const toggleHtml = `
-                <div class="harm-type-toggle" data-token-id="${tokenId}">
-                    <button type="button" class="harm-type-btn harm-void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button>
-                    ${vitButton}
-                    ${healButton}
-                </div>
-            `;
-            
-            injectToggle($row, toggleHtml);
-
-            const $saveBtn = $row.find('.roll-save-btn');
-            if (isHealing) {
-                $saveBtn.hide();
-                if ($row.find('.aoe-heal-badge').length === 0) {
-                    $saveBtn.after('<span class="aoe-heal-badge">(AoE Heal)</span>');
-                }
-            } else {
-                $saveBtn.show();
-                $row.find('.aoe-heal-badge').remove();
-            }
-        });
-
-        if (hasPermission) {
-            $html.find('.harm-type-btn').off('click').on('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const $btn = $(e.currentTarget);
-                const type = $btn.attr('data-type');
-                const tokenId = $btn.closest('.harm-type-toggle').attr('data-token-id');
-                
-                await message.setFlag("necromancer-thrall-helper", `harmState_${tokenId}`, type);
-            });
-        }
-    }
-
-    // --- BONY BARRAGE LOGIC ---
-    if (isBarrageCard) {
-        const hasArmor = message.getFlag("necromancer-thrall-helper", "boneArmorActivated");
-        const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
-        
-        if (hasArmor) {
-            $html.find('[data-token-id]').each((i, el) => {
-                const $row = $(el);
-                const tokenId = $row.attr('data-token-id');
-                
-                if (tokenId === sacrificedId) {
-                    $row.remove();
-                    return;
-                }
-                
-                const targetToken = canvas?.tokens?.get(tokenId);
-                if (!targetToken || !targetToken.actor) return;
-                
-                const alliance = targetToken.actor.system?.details?.alliance;
-                const isFriendly = alliance === "party" || targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY || targetToken.actor.id === casterId;
-                const isThrall = targetToken.document.getFlag("necromancer-thrall-helper", "masterId") === casterId;
-                
-                if (isFriendly || isThrall) {
-                    $row.find('.save-btn-container, .roll-save-btn').hide();
-                    if ($row.find('.bone-armor-badge').length === 0) {
-                        $row.find('.token-name').after(' <span class="bone-armor-badge" style="color: #4ade80; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Bone Armor]</span>');
-                    }
-                }
-            });
-            
-            if ($html.find('.bone-armor-active-badge').length === 0) {
-                const badgeHtml = `<div class="bone-armor-active-badge" style="text-align: center; color: #4ade80; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-shield-alt"></i> Bone Armor Active</div>`;
-                const targetContainer = $html.find('.card-buttons').last();
-                if (targetContainer.length > 0) targetContainer.after(badgeHtml);
-                else $html.append(badgeHtml);
-                $html.find('.bone-armor-btn').remove();
-            }
-        } 
-        else if (hasPermission) {
-            if ($html.find('.bone-armor-btn').length === 0) {
-                const btnHtml = `<button type="button" class="bone-armor-btn" style="margin-top: 5px; margin-bottom: 5px; background: #2c1a3b; color: #fff; border: 1px solid #9900ff;"><i class="fas fa-shield-alt"></i> Consume Thrall for Bone Armor</button>`;
-                const targetContainer = $html.find('.card-buttons').last();
-                if (targetContainer.length > 0) targetContainer.after(btnHtml);
-                else $html.append(btnHtml);
-
-                $html.find('.bone-armor-btn').on('click', async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-
-                    const aoeFlags = message.flags?.["aoe-easy-resolve"] || {};
-                    const targetsData = aoeFlags.targets || {};
-                    const targetIds = Object.keys(targetsData);
-                    
-                    if (targetIds.length === 0) {
-                        return ui.notifications.warn("Please wait for the cone template to register targets in the chat card!");
-                    }
-
-                    let availableThralls = [];
-                    for (const id of targetIds) {
-                        const token = canvas.tokens.get(id);
-                        if (token && token.document.getFlag("necromancer-thrall-helper", "masterId") === casterId) {
-                            availableThralls.push(token);
-                        }
-                    }
-
-                    if (availableThralls.length === 0) {
-                        return ui.notifications.warn("No secondary thrall found strictly inside the cone to sacrifice.");
-                    }
-
-                    let sacrificedThrall = null;
-                    
-                    if (availableThralls.length === 1) {
-                        sacrificedThrall = availableThralls[0];
-                    } else {
-                        sacrificedThrall = await new Promise((resolve) => {
-                            let options = availableThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
-                            new Dialog({
-                                title: "Select Sacrifice",
-                                content: `
-                                    <p>Multiple thralls detected in the blast zone. Which one is becoming armor?</p>
-                                    <form><div class="form-group"><label>Target:</label><select id="thrall-choice">${options}</select></div></form>
-                                `,
-                                buttons: {
-                                    consume: { icon: '<i class="fas fa-shield-alt"></i>', label: "Consume", callback: (dialogHtml) => {
-                                            const chosenId = dialogHtml[0].querySelector('#thrall-choice').value;
-                                            resolve(availableThralls.find(t => t.id === chosenId));
-                                        }
-                                    },
-                                    cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel", callback: () => resolve(null) }
-                                },
-                                default: "consume"
-                            }, { classes: ["dialog", "thrall-summon-dialog"] }).render(true);
-                        });
-                    }
-
-                    if (!sacrificedThrall) return;
-
-                    const updates = {
-                        "flags.necromancer-thrall-helper.boneArmorActivated": true,
-                        "flags.necromancer-thrall-helper.sacrificedThrallId": sacrificedThrall.id,
-                        "flags.necromancer-thrall-helper.applyArmorEffects": true 
-                    };
-                    
-                    updates[`flags.aoe-easy-resolve.targets.-=${sacrificedThrall.id}`] = null; 
-
-                    for (const id of targetIds) {
-                        if (id === sacrificedThrall.id) continue;
-                        
-                        const token = canvas.tokens.get(id);
-                        if (!token || !token.actor) continue;
-                        
-                        const alliance = token.actor.system?.details?.alliance;
-                        const isFriendly = alliance === "party" || token.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY || token.actor.id === casterId;
-                        const isThrall = token.document.getFlag("necromancer-thrall-helper", "masterId") === casterId;
-                        
-                        if (isFriendly || isThrall) {
-                            updates[`flags.aoe-easy-resolve.targets.${id}.isImmune`] = true;
-                        }
-                    }
-
-                    await message.update(updates);
-                    await sacrificedThrall.document.delete();
-                    
-                    await ChatMessage.create({
-                        speaker: ChatMessage.getSpeaker({ actor: game.actors.get(casterId) }),
-                        flavor: `<strong>Bone Armor Activated!</strong>`,
-                        content: `<p><b>${sacrificedThrall.name}</b> is consumed by the barrage! Allies in the blast zone take no damage and gain a +1 status bonus to AC until the start of the caster's next turn.</p>`
-                    });
-                });
-            }
-        }
-    }
-});
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     if (game.user.id !== userId) return;
     
@@ -3220,314 +1963,146 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
 });
 Hooks.on("pf2e.endTurn", async (combatant, combat, userId) => {
     if (!game.user.isGM) return;
-    
     const targetActor = combatant.actor;
     const tokenDoc = combatant.token;
     const targetToken = tokenDoc?.object || canvas.tokens.get(combatant.tokenId);
-    
     if (!tokenDoc || !targetActor || !targetToken) return;
 
-    // --- HALLOWED / CORRUPTED AURA CHECKS ---
-    const necros = combat.combatants.filter(c => c.actor?.items.some(i => i.name === "Effect: Hallowed Earth" || i.name === "Effect: Corrupted Ground"));
-    
+    const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
+
+    const necros = combat.combatants.filter(c => c.id !== combatant.id && c.actor?.items.some(i => i.name === "Effect: Hallowed Earth" || i.name === "Effect: Corrupted Ground"));
     for (const necro of necros) {
-        if (necro.id === combatant.id) continue; 
+        const nToken = necro.token?.object || canvas.tokens.get(necro.tokenId);
+        if (!nToken) continue;
         
-        const necroToken = necro.token?.object || canvas.tokens.get(necro.tokenId);
-        if (!necroToken) continue;
+        const dist = typeof nToken.distanceTo === "function" ? nToken.distanceTo(targetToken) : (Math.max(Math.abs(nToken.x - targetToken.x), Math.abs(nToken.y - targetToken.y)) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
         
-        let dist = 999;
-        if (typeof necroToken.distanceTo === "function") {
-            dist = necroToken.distanceTo(targetToken);
-        } else {
-            const dx = Math.abs(necroToken.x - targetToken.x);
-            const dy = Math.abs(necroToken.y - targetToken.y);
-            dist = (Math.max(dx, dy) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5);
-        }
-        
-        if (dist <= 10) {
-            const necroLevel = necro.actor.level || 1;
-            const scale = 2 + Math.max(0, Math.floor((necroLevel - 6) / 4)) * 2;
-            
-            const traits = targetActor.system?.traits?.value || [];
-            const isHoly = traits.includes("holy");
-            const isUnholy = traits.includes("unholy");
-            const isUndead = traits.includes("undead") || traits.some(tr => typeof tr === "string" && tr.toLowerCase() === "undead");
-            const isConstruct = traits.includes("construct");
-            const isPsychopomp = traits.includes("psychopomp");
-            const isLiving = !isUndead && !isConstruct;
+        if (dist <= 10 && DamageRoll) {
+            const scale = 2 + Math.max(0, Math.floor(((necro.actor.level || 1) - 6) / 4)) * 2;
+            const tVal = targetActor.system?.traits?.value || [];
+            const isUndead = tVal.some(tr => typeof tr === "string" && tr.toLowerCase() === "undead");
+            const isHoly = tVal.includes("holy");
+            const isUnholy = tVal.includes("unholy");
 
-            const hasHallowed = necro.actor.items.some(i => i.name === "Effect: Hallowed Earth");
-            const hasCorrupted = necro.actor.items.some(i => i.name === "Effect: Corrupted Ground");
-
-            const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-
-            if (hasHallowed && isUnholy && DamageRoll) {
-                let dmgString = `${scale}[spirit]`;
-                if (isUndead) dmgString += `,${scale}[vitality]`;
-                
-                const roll = await new DamageRoll(dmgString).evaluate();
-                await roll.toMessage({
-                    speaker: ChatMessage.getSpeaker({ actor: necro.actor }),
-                    flavor: `<strong>Hallowed Earth</strong><br><b>${necro.actor.name}'s</b> aura burns ${targetToken.name}!`
-                });
+            if (isUnholy && necro.actor.items.some(i => i.name === "Effect: Hallowed Earth")) {
+                const roll = await new DamageRoll(`${scale}[spirit]${isUndead ? `,${scale}[vitality]` : ""}`).evaluate();
+                await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: necro.actor }), flavor: `<strong>Hallowed Earth</strong><br><b>${necro.actor.name}'s</b> aura burns ${targetToken.name}!` });
                 await targetActor.applyDamage({ damage: roll, token: tokenDoc });
             }
 
-            if (hasCorrupted && (isHoly || isPsychopomp) && DamageRoll) {
-                let dmgString = `${scale}[spirit]`;
-                if (isHoly && isLiving) dmgString += `,${scale}[void]`;
-                
-                const roll = await new DamageRoll(dmgString).evaluate();
-                await roll.toMessage({
-                    speaker: ChatMessage.getSpeaker({ actor: necro.actor }),
-                    flavor: `<strong>Corrupted Ground</strong><br><b>${necro.actor.name}'s</b> aura burns ${targetToken.name}!`
-                });
+            if ((isHoly || tVal.includes("psychopomp")) && necro.actor.items.some(i => i.name === "Effect: Corrupted Ground")) {
+                const roll = await new DamageRoll(`${scale}[spirit]${(isHoly && !isUndead && !tVal.includes("construct")) ? `,${scale}[void]` : ""}`).evaluate();
+                await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: necro.actor }), flavor: `<strong>Corrupted Ground</strong><br><b>${necro.actor.name}'s</b> aura burns ${targetToken.name}!` });
                 await targetActor.applyDamage({ damage: roll, token: tokenDoc });
             }
         }
     }
-    // --- REANIMATED FOE DECAY (Triggers when the Master ends their turn) ---
-    const reanimatedFoes = canvas.scene.tokens.filter(t => 
-        t.actor && 
-        t.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe") && i.getFlag("necromancer-thrall-helper", "masterId") === targetActor.id)
-    );
 
-    if (reanimatedFoes.length > 0) {
-        const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-        if (DamageRoll) {
-            for (const foe of reanimatedFoes) {
-                const effect = foe.actor.items.find(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe"));
-                const decayAmount = effect?.getFlag("necromancer-thrall-helper", "decayAmount") || 15;
-                
-                const roll = await new DamageRoll(`${decayAmount}[untyped]`).evaluate({async: true});
-                await roll.toMessage({
-                    speaker: ChatMessage.getSpeaker({ actor: foe.actor, token: foe }),
-                    flavor: `<strong>Reanimated Decay</strong><br>The unstable corpse rots rapidly.`
-                });
-                await foe.actor.applyDamage({ damage: roll, token: foe, _necroBombProcessed: true });
-            }
+    const reanimatedFoes = canvas.scene.tokens.filter(t => t.actor?.items.some(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe") && i.getFlag("necromancer-thrall-helper", "masterId") === targetActor.id));
+    if (reanimatedFoes.length > 0 && DamageRoll) {
+        for (const foe of reanimatedFoes) {
+            const decay = foe.actor.items.find(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe"))?.getFlag("necromancer-thrall-helper", "decayAmount") || 15;
+            const roll = await new DamageRoll(`${decay}[untyped]`).evaluate({async: true});
+            await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: foe.actor, token: foe }), flavor: `<strong>Reanimated Decay</strong><br>The unstable corpse rots rapidly.` });
+            await foe.actor.applyDamage({ damage: roll, token: foe, _necroBombProcessed: true });
         }
     }
-    // --- NECROTIC BLOOD END OF TURN AUTOMATION ---
+
     const bloodEffect = targetActor.items.find(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
-    if (bloodEffect) {
-        const dc = bloodEffect.getFlag("necromancer-thrall-helper", "necroticBloodDC");
-        let currentStage = bloodEffect.getFlag("necromancer-thrall-helper", "stage") || 1;
-        const dmgType = bloodEffect.getFlag("necromancer-thrall-helper", "dmgType") || "void";
+    if (bloodEffect && bloodEffect.getFlag("necromancer-thrall-helper", "necroticBloodDC")) {
+        setTimeout(async () => {
+            const saveResult = await targetActor.saves.fortitude.roll({ dc: { value: bloodEffect.getFlag("necromancer-thrall-helper", "necroticBloodDC") }, item: bloodEffect, event: new Event('click') });
+            if (!saveResult) return;
 
-        if (dc) {
-            setTimeout(async () => {
-                const saveResult = await targetActor.saves.fortitude.roll({
-                    dc: { value: dc },
-                    item: bloodEffect,
-                    event: new Event('click')
-                });
+            const dosNum = saveResult.degreeOfSuccess ?? saveResult.options?.degreeOfSuccess ?? 2;
+            let stage = (bloodEffect.getFlag("necromancer-thrall-helper", "stage") || 1) + (dosNum === 3 ? -2 : dosNum === 2 ? -1 : dosNum === 1 ? 1 : 2);
 
-                if (!saveResult) return;
+            if (stage <= 0) {
+                await bloodEffect.delete();
+                return ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }), flavor: `<strong>Necrotic Blood Purged</strong>`, content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;"><p><b><span style="color: #4ade80;">Success!</span></b> The disease has been completely purged from ${targetActor.name}'s system.</p></div>` });
+            }
 
-                let dosNum = 2; 
-                if (saveResult.degreeOfSuccess !== undefined) dosNum = saveResult.degreeOfSuccess;
-                else if (saveResult.options?.degreeOfSuccess !== undefined) dosNum = saveResult.options.degreeOfSuccess;
+            stage = Math.min(3, stage);
+            const dmgType = bloodEffect.getFlag("necromancer-thrall-helper", "dmgType") || "void";
+            
+            await bloodEffect.update({ "system.rules": [{ key: "Weakness", type: "bleed", value: stage === 3 ? 20 : stage * 5 }], "system.description.value": `<b>Necrotic Blood (Stage ${stage})</b><br>Stage 1: 3d10 ${dmgType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${dmgType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${dmgType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>`, "flags.necromancer-thrall-helper.stage": stage });
 
-                let dosText = dosNum >= 2 ? "Success" : (dosNum === 1 ? "Failure" : "Critical Failure");
-                let dosColor = dosNum >= 2 ? "#eab308" : "#ef4444";
+            try { const sObj = targetActor.getCondition("sickened"); if ((sObj ? sObj.value : 0) < stage && typeof targetActor.increaseCondition === "function") { for(let i=(sObj ? sObj.value : 0); i<stage; i++) await targetActor.increaseCondition("sickened"); } } catch(e){}
 
-                if (dosNum === 3) currentStage -= 2;
-                else if (dosNum === 2) currentStage -= 1;
-                else if (dosNum === 1) currentStage += 1;
-                else if (dosNum === 0) currentStage += 2;
-
-                if (currentStage <= 0) {
-                    await bloodEffect.delete();
-                    await ChatMessage.create({
-                        speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }),
-                        flavor: `<strong>Necrotic Blood Purged</strong>`,
-                        content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;"><p><b><span style="color: #4ade80;">Success!</span></b> The disease has been completely purged from ${targetActor.name}'s system.</p></div>`
-                    });
-                    return;
-                }
-
-                if (currentStage > 3) currentStage = 3;
-
-                const weaknessVal = currentStage === 3 ? 20 : currentStage * 5;
-                const newRules = [{ key: "Weakness", type: "bleed", value: weaknessVal }];
-                const newDesc = `<b>Necrotic Blood (Stage ${currentStage})</b><br>Stage 1: 3d10 ${dmgType}, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 ${dmgType}, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 ${dmgType}, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i>`;
-
-                await bloodEffect.update({
-                    "system.rules": newRules,
-                    "system.description.value": newDesc,
-                    "flags.necromancer-thrall-helper.stage": currentStage
-                });
-
-                try {
-                    const currentSickenedObj = targetActor.getCondition("sickened");
-                    const currentSickened = currentSickenedObj ? currentSickenedObj.value : 0;
-                    if (currentSickened < currentStage && typeof targetActor.increaseCondition === "function") {
-                        for (let i = currentSickened; i < currentStage; i++) await targetActor.increaseCondition("sickened");
-                    }
-                } catch(e) {}
-
-                const diceCount = currentStage + 2;
-                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-                if (DamageRoll) {
-                    const roll = await new DamageRoll(`${diceCount}d10[${dmgType}]`).evaluate({async: true});
-                    
-                    const flavorHtml = `
-                        <div style="background: rgba(0,0,0,0.3); padding: 6px; border-radius: 4px; border-left: 4px solid ${dosColor}; margin-bottom: 5px;">
-                            <strong>Necrotic Blood (Stage ${currentStage})</strong><br>
-                            <span style="color: ${dosColor}; font-weight: bold;">${dosText}!</span> The disease ravages ${targetActor.name}.
-                        </div>
-                    `;
-                    
-                    await roll.toMessage({
-                        speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }),
-                        flavor: flavorHtml
-                    });
-                    
-                    await targetActor.applyDamage({ damage: roll, token: tokenDoc, _necroBombProcessed: true }); 
-                }
-            }, 800); 
-        }
+            if (DamageRoll) {
+                const roll = await new DamageRoll(`${stage + 2}d10[${dmgType}]`).evaluate({async: true});
+                await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }), flavor: `<div style="background: rgba(0,0,0,0.3); padding: 6px; border-radius: 4px; border-left: 4px solid ${dosNum >= 2 ? "#eab308" : "#ef4444"}; margin-bottom: 5px;"><strong>Necrotic Blood (Stage ${stage})</strong><br><span style="color: ${dosNum >= 2 ? "#eab308" : "#ef4444"}; font-weight: bold;">${dosNum >= 2 ? "Success" : (dosNum === 1 ? "Failure" : "Critical Failure")}!</span> The disease ravages ${targetActor.name}.</div>` });
+                await targetActor.applyDamage({ damage: roll, token: tokenDoc, _necroBombProcessed: true });
+            }
+        }, 800);
     }
 
-    // --- CALCIFICATION END OF TURN AUTOMATION ---
     const calcEffect = targetActor.items.find(i => i.getFlag("necromancer-thrall-helper", "isCalcifying"));
-    if (calcEffect) {
-        const dc = calcEffect.getFlag("necromancer-thrall-helper", "calcificationDC");
-        if (dc) {
-            setTimeout(async () => {
-                await ChatMessage.create({
-                    speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }),
-                    flavor: `<strong>Calcification Progression</strong>`,
-                    content: `
-                        <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #e2e8f0;">
-                            <p style="margin: 0 0 4px 0;"><b>${targetActor.name}'s</b> flesh continues to solidify into pure bone!</p>
-                            <p style="margin: 0; font-size: 0.9em; font-style: italic;">Rolling Fortitude Save vs DC ${dc} (Incapacitation)...</p>
-                        </div>
-                    `
-                });
+    if (calcEffect && calcEffect.getFlag("necromancer-thrall-helper", "calcificationDC")) {
+        setTimeout(async () => {
+            await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }), flavor: `<strong>Calcification Progression</strong>`, content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #e2e8f0;"><p style="margin: 0 0 4px 0;"><b>${targetActor.name}'s</b> flesh continues to solidify into pure bone!</p><p style="margin: 0; font-size: 0.9em; font-style: italic;">Rolling Fortitude Save vs DC ${calcEffect.getFlag("necromancer-thrall-helper", "calcificationDC")} (Incapacitation)...</p></div>` });
+            
+            const saveResult = await targetActor.saves.fortitude.roll({ dc: { value: calcEffect.getFlag("necromancer-thrall-helper", "calcificationDC") }, item: calcEffect, extraRollOptions: ["incapacitation"], event: new Event('click') });
+            if (!saveResult) return;
 
-                const saveResult = await targetActor.saves.fortitude.roll({ 
-                    dc: { value: dc }, 
-                    item: calcEffect,
-                    extraRollOptions: ["incapacitation"], 
-                    event: new Event('click')
-                });
+            const dosNum = saveResult.degreeOfSuccess ?? saveResult.options?.degreeOfSuccess ?? 2;
+            let curSlow = targetActor.getCondition("slowed")?.value || 0;
+            let outcomeHtml = "";
 
-                if (!saveResult) return;
-
-                let dosNum = 2; 
-                if (saveResult.degreeOfSuccess !== undefined) dosNum = saveResult.degreeOfSuccess;
-                else if (saveResult.options?.degreeOfSuccess !== undefined) dosNum = saveResult.options.degreeOfSuccess;
-
-                let curSlowObj = targetActor.getCondition("slowed");
-                let curSlow = curSlowObj ? curSlowObj.value : 0;
-                let outcomeHtml = "";
-
-                if (dosNum === 2 || dosNum === 3) { 
-                    curSlow -= 1;
-                    if (curSlow <= 0) {
-                        await calcEffect.delete();
-                        if (curSlowObj) await targetActor.decreaseCondition("slowed");
-                        outcomeHtml = `<p><b><span style="color: #4ade80;">Success!</span></b> The brittle bone harmlessly shatters off. The effect ends!</p>`;
-                    } else {
-                        await targetActor.decreaseCondition("slowed");
-                        outcomeHtml = `<p><b><span style="color: #eab308;">Success.</span></b> Slowed decreases by 1. Now <b>Slowed ${curSlow}</b>.</p>`;
-                    }
-                } 
-                else { 
-                    const increaseBy = dosNum === 0 ? 2 : 1;
-                    curSlow += increaseBy;
-                    for (let i = 0; i < increaseBy; i++) {
-                        await targetActor.increaseCondition("slowed");
-                    }
-
-                    if (curSlow >= 3) {
-                        await calcEffect.delete();
-                        await targetActor.toggleCondition("petrified");
-                        outcomeHtml = `<p><b><span style="color: #ef4444;">Fully Calcified!</span></b> ${targetActor.name} has been permanently turned into a bone statue (Petrified).</p>`;
-                    } else {
-                        outcomeHtml = `<p><b><span style="color: #ef4444;">${dosNum === 0 ? "Critical Failure!" : "Failure!"}</span></b> Slowed increases by ${increaseBy}. Now <b>Slowed ${curSlow}</b>.</p>`;
-                    }
+            if (dosNum >= 2) {
+                curSlow -= 1;
+                if (curSlow <= 0) { 
+                    await calcEffect.delete(); 
+                    if (targetActor.getCondition("slowed")) await targetActor.decreaseCondition("slowed"); 
+                    outcomeHtml = `<p><b><span style="color: #4ade80;">Success!</span></b> The brittle bone harmlessly shatters off. The effect ends!</p>`; 
+                } else { 
+                    await targetActor.decreaseCondition("slowed"); 
+                    outcomeHtml = `<p><b><span style="color: #eab308;">Success.</span></b> Slowed decreases by 1. Now <b>Slowed ${curSlow}</b>.</p>`; 
                 }
-
-                await ChatMessage.create({
-                    speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }),
-                    flavor: `<strong>Calcification Result</strong>`,
-                    content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #ef4444;">${outcomeHtml}</div>`
-                });
-
-            }, 1000); 
-        }
+            } else {
+                const inc = dosNum === 0 ? 2 : 1;
+                curSlow += inc;
+                for (let i = 0; i < inc; i++) await targetActor.increaseCondition("slowed");
+                if (curSlow >= 3) { 
+                    await calcEffect.delete(); 
+                    await targetActor.toggleCondition("petrified"); 
+                    outcomeHtml = `<p><b><span style="color: #ef4444;">Fully Calcified!</span></b> ${targetActor.name} has been permanently turned into a bone statue (Petrified).</p>`; 
+                } else { 
+                    outcomeHtml = `<p><b><span style="color: #ef4444;">${dosNum === 0 ? "Critical Failure!" : "Failure!"}</span></b> Slowed increases by ${inc}. Now <b>Slowed ${curSlow}</b>.</p>`; 
+                }
+            }
+            await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: targetActor, token: tokenDoc }), flavor: `<strong>Calcification Result</strong>`, content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #ef4444;">${outcomeHtml}</div>` });
+        }, 1000);
     }
 });
 
 Hooks.on("pf2e.startTurn", async (combatant, combat, userId) => {
-    if (!game.user.isGM) return;
-    const actor = combatant.actor;
-    if (!actor) return;
-
-    // --- ZOMBIE HORDE (Current Combatant Tracker) ---
-    const hasZombieHorde = actor.items.some(i => i.name === "Zombie Horde");
-    if (!hasZombieHorde) return;
-
-    const anchors = canvas.scene.tokens.filter(t => t.getFlag("necromancer-thrall-helper", "masterId") === actor.id && t.getFlag("necromancer-thrall-helper", "isHordeAnchor"));
-
+    if (!game.user.isGM || !combatant.actor?.items.some(i => i.name === "Zombie Horde")) return;
+    
+    const anchors = canvas.scene.tokens.filter(t => t.getFlag("necromancer-thrall-helper", "masterId") === combatant.actor.id && t.getFlag("necromancer-thrall-helper", "isHordeAnchor"));
+    
     for (const anchor of anchors) {
         const gridSize = canvas.scene.grid.size;
         const gridDist = canvas.scene.grid.distance;
         let radiusFeet = anchor.getFlag("necromancer-thrall-helper", "hordeRadius") || 10;
         let pixels = (radiusFeet / gridDist) * gridSize;
+        const cX = anchor.x + (anchor.width * gridSize) / 2;
+        const cY = anchor.y + (anchor.height * gridSize) / 2;
 
-        const centerX = anchor.x + (anchor.width * gridSize) / 2;
-        const centerY = anchor.y + (anchor.height * gridSize) / 2;
-
-        const thralls = canvas.scene.tokens.filter(t => {
-            if (t.id === anchor.id) return false;
-            if (t.getFlag("necromancer-thrall-helper", "isHordeAnchor")) return false;
-            if (t.flags?.["necromancer-thrall-helper"]?.masterId !== actor.id) return false;
-
-            const tCenterX = t.x + (t.width * gridSize) / 2;
-            const tCenterY = t.y + (t.height * gridSize) / 2;
-            const dx = tCenterX - centerX;
-            const dy = tCenterY - centerY;
-            return Math.sqrt(dx*dx + dy*dy) <= pixels;
-        });
+        const thralls = canvas.scene.tokens.filter(t => t.id !== anchor.id && !t.getFlag("necromancer-thrall-helper", "isHordeAnchor") && t.flags?.["necromancer-thrall-helper"]?.masterId === combatant.actor.id && Math.hypot((t.x + (t.width * gridSize) / 2) - cX, (t.y + (t.height * gridSize) / 2) - cY) <= pixels);
 
         if (thralls.length > 0) {
-            let newRadius = radiusFeet + (5 * thralls.length);
-            if (newRadius > 30) newRadius = 30;
-
+            const newRadius = Math.min(30, radiusFeet + (5 * thralls.length));
             for (const t of thralls) await t.delete();
 
             if (newRadius > radiusFeet) {
                 await anchor.setFlag("necromancer-thrall-helper", "hordeRadius", newRadius);
                 pixels = (newRadius / gridDist) * gridSize;
-
-                const region = canvas.scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id);
-                if (region) {
-                    await region.update({
-                        shapes: [{
-                            type: "ellipse", hole: false, x: centerX, y: centerY,
-                            radiusX: pixels, radiusY: pixels, rotation: 0
-                        }]
-                    });
-                }
                 
-                const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id);
-                if (drawing) {
-                    await drawing.update({
-                        x: centerX - pixels,
-                        y: centerY - pixels,
-                        shape: { type: "e", width: pixels * 2, height: pixels * 2 }
-                    });
-                }
-
-                ChatMessage.create({
-                    speaker: ChatMessage.getSpeaker({ actor: actor }),
-                    content: `<p><strong>Zombie Horde Expands!</strong> The horde consumes ${thralls.length} thrall(s), swelling its radius to ${newRadius} feet!</p>`
-                });
+                await canvas.scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id)?.update({ shapes: [{ type: "ellipse", hole: false, x: cX, y: cY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
+                await canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id)?.update({ x: cX - pixels, y: cY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
+                
+                ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: combatant.actor }), content: `<p><strong>Zombie Horde Expands!</strong> The horde consumes ${thralls.length} thrall(s), swelling its radius to ${newRadius} feet!</p>` });
             }
         }
     }
@@ -3747,118 +2322,66 @@ globalThis.NecroThrallHelper.checkNightmareHaunt = async (nightmareTokenDoc, spe
 };
 
 Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
-    if (game.user.id !== userId) return; 
-    if (!("x" in changes || "y" in changes)) return;
+    if (game.user.id !== userId || !("x" in changes || "y" in changes)) return;
 
-    // --- RECURRING NIGHTMARE: ONLY TRIGGERS ON THRALL MOVEMENT ---
+    const scene = canvas.scene;
+    if (!scene) return;
+
+    const destX = changes.x ?? tokenDoc.x;
+    const destY = changes.y ?? tokenDoc.y;
+    const gridSize = scene.grid.size;
+    const gridDist = scene.grid.distance;
+    const tCenterX = destX + (tokenDoc.width * gridSize) / 2;
+    const tCenterY = destY + (tokenDoc.height * gridSize) / 2;
+
     if (tokenDoc.getFlag("necromancer-thrall-helper", "isRecurringNightmare")) {
-        const destX = changes.x !== undefined ? changes.x : tokenDoc.x;
-        const destY = changes.y !== undefined ? changes.y : tokenDoc.y;
         globalThis.NecroThrallHelper?.checkNightmareHaunt(tokenDoc, null, { x: destX, y: destY });
     }
 
-    const gridSize = canvas.scene.grid.size;
-    const gridDist = canvas.scene.grid.distance;
+    const toggleFastHealing = async (effect, tX, tY, iX, iY, enterMsg, leaveMsg) => {
+        const dist = (Math.max(Math.abs(tX - iX), Math.abs(tY - iY)) / gridSize) * gridDist;
+        const rules = effect.system.rules;
+        const hasFastHealing = rules.some(r => r.key === "FastHealing");
+        
+        if (dist <= 15 && !hasFastHealing) {
+            const rank = effect.getFlag("necromancer-thrall-helper", "spellRank") || 1;
+            await effect.update({ "system.rules": [...rules, { key: "FastHealing", value: rank, type: "fast-healing" }] });
+            ui.notifications.info(enterMsg);
+        } else if (dist > 15 && hasFastHealing) {
+            await effect.update({ "system.rules": rules.filter(r => r.key !== "FastHealing") });
+            ui.notifications.warn(leaveMsg);
+        }
+    };
 
-    // --- 1. Song of the Soul Distance Tether ---
-    if (canvas.scene) {
-        if (tokenDoc.actor) {
-            const recipientEffects = tokenDoc.actor.items.filter(i => i.name === "Effect: Song of the Soul (Recipient)");
-            for (const effect of recipientEffects) {
-                const instrumentId = effect.getFlag("necromancer-thrall-helper", "instrumentId");
-                const instrument = canvas.scene.tokens.get(instrumentId);
-                if (!instrument) {
-                    await effect.delete();
-                    continue;
-                }
-                const tCenterX = (changes.x !== undefined ? changes.x : tokenDoc.x) + (tokenDoc.width * gridSize) / 2;
-                const tCenterY = (changes.y !== undefined ? changes.y : tokenDoc.y) + (tokenDoc.height * gridSize) / 2;
-                const iCenterX = instrument.x + (instrument.width * gridSize) / 2;
-                const iCenterY = instrument.y + (instrument.height * gridSize) / 2;
-                
-                const dx = Math.abs(tCenterX - iCenterX);
-                const dy = Math.abs(tCenterY - iCenterY);
-                const dist = (Math.max(dx, dy) / gridSize) * gridDist;
-
-                const hasFastHealing = effect.system.rules.some(r => r.key === "FastHealing");
-                const spellRank = effect.getFlag("necromancer-thrall-helper", "spellRank") || 1;
-
-                if (dist <= 15 && !hasFastHealing) {
-                    const newRules = foundry.utils.duplicate(effect.system.rules);
-                    newRules.push({ key: "FastHealing", value: spellRank, type: "fast-healing" });
-                    await effect.update({ "system.rules": newRules });
-                    ui.notifications.info(`${tokenDoc.name} re-entered the Song's range. Fast Healing restored.`);
-                } else if (dist > 15 && hasFastHealing) {
-                    const newRules = effect.system.rules.filter(r => r.key !== "FastHealing");
-                    await effect.update({ "system.rules": newRules });
-                    ui.notifications.warn(`${tokenDoc.name} left the Song's range. Fast Healing suppressed.`);
-                }
+    if (tokenDoc.actor) {
+        const recipientEffects = tokenDoc.actor.items.filter(i => i.name === "Effect: Song of the Soul (Recipient)");
+        for (const effect of recipientEffects) {
+            const inst = scene.tokens.get(effect.getFlag("necromancer-thrall-helper", "instrumentId"));
+            if (!inst) { 
+                await effect.delete(); 
+                continue; 
             }
+            await toggleFastHealing(effect, tCenterX, tCenterY, inst.x + (inst.width * gridSize) / 2, inst.y + (inst.height * gridSize) / 2, `${tokenDoc.name} re-entered the Song's range. Fast Healing restored.`, `${tokenDoc.name} left the Song's range. Fast Healing suppressed.`);
         }
 
-        const isInstrument = tokenDoc.actor?.items.some(i => i.name === "Effect: Song Instrument");
-        if (isInstrument) {
-            const iCenterX = (changes.x !== undefined ? changes.x : tokenDoc.x) + (tokenDoc.width * gridSize) / 2;
-            const iCenterY = (changes.y !== undefined ? changes.y : tokenDoc.y) + (tokenDoc.height * gridSize) / 2;
-
-            for (const t of canvas.scene.tokens) {
-                if (t.actor && t.id !== tokenDoc.id) {
-                    const effect = t.actor.items.find(i => i.name === "Effect: Song of the Soul (Recipient)" && i.getFlag("necromancer-thrall-helper", "instrumentId") === tokenDoc.id);
-                    if (effect) {
-                        const tCenterX = t.x + (t.width * gridSize) / 2;
-                        const tCenterY = t.y + (t.height * gridSize) / 2;
-                        const dx = Math.abs(tCenterX - iCenterX);
-                        const dy = Math.abs(tCenterY - iCenterY);
-                        const dist = (Math.max(dx, dy) / gridSize) * gridDist;
-
-                        const hasFastHealing = effect.system.rules.some(r => r.key === "FastHealing");
-                        const spellRank = effect.getFlag("necromancer-thrall-helper", "spellRank") || 1;
-
-                        if (dist <= 15 && !hasFastHealing) {
-                            const newRules = foundry.utils.duplicate(effect.system.rules);
-                            newRules.push({ key: "FastHealing", value: spellRank, type: "fast-healing" });
-                            await effect.update({ "system.rules": newRules });
-                            ui.notifications.info(`The instrument moved in range of ${t.name}. Fast Healing restored.`);
-                        } else if (dist > 15 && hasFastHealing) {
-                            const newRules = effect.system.rules.filter(r => r.key !== "FastHealing");
-                            await effect.update({ "system.rules": newRules });
-                            ui.notifications.warn(`The instrument moved out of ${t.name}'s range. Fast Healing suppressed.`);
-                        }
-                    }
+        if (tokenDoc.actor.items.some(i => i.name === "Effect: Song Instrument")) {
+            for (const t of scene.tokens) {
+                if (!t.actor || t.id === tokenDoc.id) continue;
+                const effect = t.actor.items.find(i => i.name === "Effect: Song of the Soul (Recipient)" && i.getFlag("necromancer-thrall-helper", "instrumentId") === tokenDoc.id);
+                if (effect) {
+                    await toggleFastHealing(effect, t.x + (t.width * gridSize) / 2, t.y + (t.height * gridSize) / 2, tCenterX, tCenterY, `The instrument moved in range of ${t.name}. Fast Healing restored.`, `The instrument moved out of ${t.name}'s range. Fast Healing suppressed.`);
                 }
             }
         }
     }
 
-    // --- 2. Zombie Horde Drag Logic (Visual Sync Only) ---
-    const isAnchor = tokenDoc.getFlag("necromancer-thrall-helper", "isHordeAnchor");
-    if (isAnchor) {
-        const region = canvas.scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
-        const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
-
-        if (region || drawing) {
-            let radiusFeet = tokenDoc.getFlag("necromancer-thrall-helper", "hordeRadius") || 10;
-            const centerX = (changes.x !== undefined ? changes.x : tokenDoc.x) + (tokenDoc.width * gridSize) / 2;
-            const centerY = (changes.y !== undefined ? changes.y : tokenDoc.y) + (tokenDoc.height * gridSize) / 2;
-            const pixels = (radiusFeet / gridDist) * gridSize;
-
-            if (region) {
-                await region.update({
-                    shapes: [{
-                        type: "ellipse", hole: false, x: centerX, y: centerY,
-                        radiusX: pixels, radiusY: pixels, rotation: 0
-                    }]
-                });
-            }
-
-            if (drawing) {
-                await drawing.update({
-                    x: centerX - pixels,
-                    y: centerY - pixels,
-                    shape: { type: "e", width: pixels * 2, height: pixels * 2 }
-                });
-            }
-        }
+    if (tokenDoc.getFlag("necromancer-thrall-helper", "isHordeAnchor")) {
+        const pixels = ((tokenDoc.getFlag("necromancer-thrall-helper", "hordeRadius") || 10) / gridDist) * gridSize;
+        const region = scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
+        const drawing = scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
+        
+        if (region) await region.update({ shapes: [{ type: "ellipse", hole: false, x: tCenterX, y: tCenterY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
+        if (drawing) await drawing.update({ x: tCenterX - pixels, y: tCenterY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
     }
 });
 
@@ -3956,14 +2479,13 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
             const harmState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`);
             if (harmState) {
                 let isHealing = false;
+                let isImmune = false;
                 if (harmState === "void") isHealing = negHeal;
-                if (harmState === "vit") isHealing = !negHeal;
+                if (harmState === "vit") isImmune = !negHeal;
                 if (harmState === "heal") isHealing = true;
 
                 msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`] = isHealing;
-                if (isHealing) {
-                    msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = false;
-                }
+                msgUpdates[`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`] = isImmune;
             }
         }
     }
@@ -3971,8 +2493,11 @@ Hooks.on("updateChatMessage", async (message, changes, options, userId) => {
     if (!foundry.utils.isEmpty(msgUpdates)) {
         await message.update(msgUpdates, { necroHelperProcessed: true });
         
-        if (game.modules.get("aoe-easy-resolve")?.api?.refreshCard) {
-            await game.modules.get("aoe-easy-resolve").api.refreshCard(message.id);
+        const aoeApi = game.modules.get("aoe-easy-resolve")?.api;
+        if (aoeApi?.updateTargetState && Object.keys(targets).length > 0) {
+     
+            const firstTokenId = Object.keys(targets)[0];
+            await aoeApi.updateTargetState(message.id, firstTokenId, {});
         }
     }
 });
@@ -10044,7 +8569,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     rangeIndicator.zIndex = 998;
                     canvas.tokens.addChild(rangeIndicator);
                 }
-
                 const gridSize = canvas.grid.size;
                 const ghost = new PIXI.Graphics();
                 ghost.beginFill(0x990000, 0.4);
@@ -10067,9 +8591,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     }
                     ghost.position.set(spawnX, spawnY);
                 };
-
                 canvas.stage.on("pointermove", updateGhost);
-
                 const cleanUp = () => {
                     document.body.style.cursor = "";
                     canvas.app.view.style.cursor = "";
@@ -10080,19 +8602,16 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         rangeIndicator = null;
                     }
                 };
-
                 const interactionHandler = async (event) => {
                     if (event.data.button !== 0 && event.data.button !== 2) {
                         canvas.stage.once("pointerdown", interactionHandler);
                         return;
                     }
-
                     if (event.data.button === 2) {
                         ui.notifications.info("Conjuration cancelled.");
                         cleanUp();
                         return;
                     }
-
                     const position = event.data.getLocalPosition(canvas.app.stage);
                     let spawnX = position.x;
                     let spawnY = position.y;
@@ -10113,7 +8632,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             return;
                         }
                     }
-
                     const tetherId = foundry.utils.randomID();
                     const tokenDoc = await tendrilActor.getTokenDocument({ x: spawnX, y: spawnY });
 
@@ -10162,7 +8680,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             }
                         }
                     };
-
                     const drawingData = {
                         author: game.user.id,
                         shape: { type: "e", width: gridSize * 5, height: gridSize * 5 },
@@ -10194,7 +8711,6 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 canvas.stage.once("pointerdown", interactionHandler);
             });
         }
-        
         const killBtns = html.querySelectorAll(".kill-btn");
         killBtns.forEach(killBtn => {
             killBtn.addEventListener("click", async (e) => {

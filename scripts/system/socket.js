@@ -107,10 +107,12 @@ export async function executeSpawn(payload) {
     if (game.user.isGM) {
         const scene = game.scenes.active;
         if (!scene) return;
+        const maxSort = Math.max(0, ...canvas.tokens.placeables.map(t => t.document.sort));
         const spawnData = foundry.utils.mergeObject(payload, { 
             x: payload.x, 
             y: payload.y, 
-            sort: 100, 
+            elevation: payload.elevation ?? 0,
+            sort: maxSort + 100, 
             hidden: false 
         });
         const createdTokens = await scene.createEmbeddedDocuments("Token", [spawnData]);
