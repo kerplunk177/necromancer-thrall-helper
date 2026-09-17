@@ -1174,15 +1174,32 @@ Hooks.on("renderChatMessage", (message, html) => {
 
     const injectToggle = ($row, htmlString) => {
         const $saveContainer = $row.find('.save-btn-container, .roll-save-btn').first();
-        if ($saveContainer.length > 0) $saveContainer.before(htmlString);
-        else {
-            const $img = $row.find('img').first();
-            if ($img.length > 0) $img.parent().append(htmlString);
-            else $row.find('.token-name, span[title]').first().after(htmlString);
+        if ($saveContainer.length > 0) {
+            $saveContainer.before(htmlString);
+        } else {
+            let targetNode = null;
+            $row.find('*').addBack().contents().each(function() {
+                if (this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing" || this.nodeValue.trim() === "Missed")) {
+                    targetNode = this;
+                }
+            });
+            if (targetNode) $(targetNode).before(htmlString);
+            else {
+                const $name = $row.find('.token-name').first();
+                if ($name.length > 0) $name.after(htmlString);
+                else $row.append(htmlString);
+            }
         }
     };
 
     const isErasCard = (itemName.includes("Necrotic Bomb") || itemName.includes("Necrotic Blast") || msgContent.includes("Necrotic Bomb") || msgContent.includes("Necrotic Blast")) && !isResolution;
+    
+    if (isErasCard || itemName.includes("Desperate Revival") || itemName.includes("Dread Mosquito") || msgContent.includes("Desperate Revival") || msgContent.includes("Dread Mosquito")) {
+        if ($html.find('#necro-bomb-style').length === 0) {
+            $html.prepend(`<style id="necro-bomb-style">.necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; } .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .void-opt { border-radius: 3px 0 0 3px; } .vit-opt { border-radius: 0 3px 3px 0; } .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
+        }
+    }
+
     if (isErasCard) {
         if ($html.find('#necro-bomb-style').length === 0) {
             $html.prepend(`<style id="necro-bomb-style">.necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; } .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .void-opt { border-radius: 3px 0 0 3px; } .vit-opt { border-radius: 0 3px 3px 0; } .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
@@ -1684,8 +1701,8 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
             });
             if (targetNode) $(targetNode).before(htmlString);
             else {
-                const $img = $r.find('img').first();
-                if ($img.length > 0) $img.parent().append(htmlString);
+                const $name = $r.find('.token-name').first();
+                if ($name.length > 0) $name.after(htmlString);
                 else $r.append(htmlString);
             }
         }
