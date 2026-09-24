@@ -2580,10 +2580,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
         const actor = game.actors.get(necroId);
         if (actor) {
-            const hasNecroClass = actor.items.some(i => i.type === "class" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
-            const hasNecroDedication = actor.items.some(i => i.type === "feat" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
+            const isAuthorized = actor.items.some(i => {
+                const name = i.name.toLowerCase();
+                const slug = i.system?.slug || "";
+                
+                if (name.includes("necro") || slug.includes("necro") || name.includes("reanimator") || name.includes("undead master")) return true;
+                
+                if (name.includes("conjurer of corpses") || i.flags?.["necromancer-thrall-helper"]) return true;
+                
+                return false;
+            });
             
-            if (!hasNecroClass && !hasNecroDedication && !game.user.isGM) {
+            if (!isAuthorized && !game.user.isGM) {
                 ui.notifications.warn("This mortal lacks the dark blood and discipline required to command the dead.");
                 throw new Error("Unauthorized Command Deck access.");
             }
