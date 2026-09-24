@@ -23,16 +23,20 @@ async function requestSpawn(payload) {
     const necroName = necro ? necro.name : "A Necromancer";
 
     let confirm = true;
-    try {
-        confirm = await Dialog.confirm({
-            title: "Thrall Summon Request",
-            content: `<p><b>${necroName}</b> is attempting to summon a Thrall at this highlighted location. Allow?</p>`,
-            yes: () => true,
-            no: () => false,
-            defaultYes: true
-        });
-    } catch (e) {
-        console.error("Necromancer Helper | Dialog confirmation failed:", e);
+    const autoApprove = game.settings.get("necromancer-thrall-helper", "autoApproveSpawns");
+
+    if (!autoApprove) {
+        try {
+            confirm = await Dialog.confirm({
+                title: "Thrall Summon Request",
+                content: `<p><b>${necroName}</b> is attempting to summon a Thrall at this highlighted location. Allow?</p>`,
+                yes: () => true,
+                no: () => false,
+                defaultYes: true
+            });
+        } catch (e) {
+            console.error("Necromancer Helper | Dialog confirmation failed:", e);
+        }
     }
 
     highlight.destroy();

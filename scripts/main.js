@@ -10,6 +10,24 @@ Hooks.once("setup", function () {
 
 Hooks.once("init", () => {
     console.log("Necromancer Thrall Helper | Initializing the dark arts...");
+    
+    game.settings.register("necromancer-thrall-helper", "autoApproveSpawns", {
+        name: "Auto-Approve Player Spawns",
+        hint: "If enabled, player requests to spawn thralls will bypass the GM approval prompt and spawn immediately.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+
+    game.settings.register("necromancer-thrall-helper", "requireNecromancer", {
+        name: "Require Necromancer Features",
+        hint: "If disabled, any character can open the Command Deck regardless of their class, archetype, or items.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
 });
 
 Hooks.once("ready", () => {
@@ -26,12 +44,21 @@ Hooks.on("getSceneControlButtons", (controls) => {
         button: true,
         onClick: () => {
             let isNecro = game.user.isGM;
+            const requireNecro = game.settings.get("necromancer-thrall-helper", "requireNecromancer");
             
-            if (!isNecro && game.user.character) {
+            if (!requireNecro) {
+                isNecro = true;
+            } else if (!isNecro && game.user.character) {
                 const actor = game.user.character;
-                const hasNecroClass = actor.items.some(i => i.type === "class" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
-                const hasNecroDedication = actor.items.some(i => i.type === "feat" && (i.name.toLowerCase().includes("necromancer") || i.system?.slug?.includes("necromancer")));
-                isNecro = hasNecroClass || hasNecroDedication;
+                isNecro = actor.items.some(i => {
+                    const name = i.name.toLowerCase();
+                    const slug = i.system?.slug || "";
+                    
+                    if (name.includes("necro") || slug.includes("necro") || name.includes("reanimator") || name.includes("undead master")) return true;
+                    if (name.includes("conjurer of corpses") || i.flags?.["necromancer-thrall-helper"]) return true;
+                    
+                    return false;
+                });
             }
 
             if (!isNecro) {

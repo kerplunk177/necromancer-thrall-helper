@@ -2579,13 +2579,14 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         }
 
         const actor = game.actors.get(necroId);
-        if (actor) {
+        const requireNecro = game.settings.get("necromancer-thrall-helper", "requireNecromancer");
+
+        if (actor && requireNecro) {
             const isAuthorized = actor.items.some(i => {
                 const name = i.name.toLowerCase();
                 const slug = i.system?.slug || "";
                 
                 if (name.includes("necro") || slug.includes("necro") || name.includes("reanimator") || name.includes("undead master")) return true;
-                
                 if (name.includes("conjurer of corpses") || i.flags?.["necromancer-thrall-helper"]) return true;
                 
                 return false;

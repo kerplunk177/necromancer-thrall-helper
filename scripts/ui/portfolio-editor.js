@@ -77,6 +77,9 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 html.querySelector("#new-thrall-name").value = target.name || "";
                 html.querySelector("#new-thrall-img").value = target.img || "";
                 html.querySelector("#new-thrall-unique").checked = !!target.isUnique;
+                html.querySelector("#new-thrall-ring").checked = target.ring !== false;
+                html.querySelector("#new-thrall-scale").value = target.scale ?? 1.0;
+                html.querySelector("#new-thrall-scale-val").textContent = target.scale ?? 1.0;
 
                 const checkboxes = html.querySelectorAll("input[name='adjective']");
                 const customAdjs = [];
@@ -122,6 +125,12 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 selectAllBtn.textContent = allChecked ? "Select All" : "Deselect All";
             });
         }
+        const scaleSlider = html.querySelector("#new-thrall-scale");
+        if (scaleSlider) {
+            scaleSlider.addEventListener("input", (e) => {
+                html.querySelector("#new-thrall-scale-val").textContent = e.target.value;
+            });
+        }
         const saveBtn = html.querySelector("#save-thrall-btn");
         if (saveBtn) {
             saveBtn.addEventListener("click", async (e) => {
@@ -130,6 +139,8 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                 let img = html.querySelector("#new-thrall-img").value.trim();
                 const customAdjRaw = html.querySelector("#new-thrall-custom-adj").value.trim();
                 const isUnique = html.querySelector("#new-thrall-unique").checked;
+                const useRing = html.querySelector("#new-thrall-ring").checked;
+                const imgScale = parseFloat(html.querySelector("#new-thrall-scale").value);
 
                 if (!name) {
                     ui.notifications.warn("A thrall name is required.");
@@ -167,7 +178,7 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                                 name: name,
                                 img: img,
                                 adjectives: adjectives,
-                                isUnique: isUnique
+                                isUnique: isUnique, ring: useRing, scale: imgScale
                             };
                         }
                         return p;
@@ -184,7 +195,7 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
                         name: name,
                         img: img,
                         adjectives: adjectives,
-                        isUnique: isUnique
+                        isUnique: isUnique, ring: useRing, scale: imgScale
                     });
                 }
 
@@ -201,7 +212,9 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         html.querySelector("#new-thrall-name").value = "";
         html.querySelector("#new-thrall-img").value = "";
         html.querySelector("#new-thrall-custom-adj").value = "";
-        html.querySelector("#new-thrall-unique").checked = true; 
+        html.querySelector("#new-thrall-ring").checked = true;
+        html.querySelector("#new-thrall-scale").value = 1.0;
+        html.querySelector("#new-thrall-scale-val").textContent = "1";
         html.querySelectorAll("input[name='adjective']").forEach(cb => cb.checked = false);
         const saveBtn = html.querySelector("#save-thrall-btn");
         saveBtn.innerHTML = '<i class="fas fa-plus"></i> Add to Portfolio';

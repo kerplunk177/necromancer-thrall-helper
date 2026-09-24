@@ -151,11 +151,24 @@ export async function prepareThrallPayload(necroActor, presetId = "default") {
         tokenData.name = finalName;
         tokenData.texture.src = preset.img;
         
-        if (tokenData.ring) {
-            const isDefaultLook = preset.id === "default" || tokenData.texture.src.includes("default-icons/npc.svg");
-            tokenData.ring.enabled = isDefaultLook;
+        if (preset.scale !== undefined) {
+            tokenData.texture.scaleX = preset.scale;
+            tokenData.texture.scaleY = preset.scale;
+            if (tokenData.ring && tokenData.ring.subject) {
+                tokenData.ring.subject.scale = preset.scale;
+            }
         }
-}
+        
+        if (tokenData.ring) {
+            if (preset.ring !== undefined) {
+                tokenData.ring.enabled = preset.ring;
+            } else {
+                const isDefaultLook = preset.id === "default" || tokenData.texture.src.includes("default-icons/npc.svg");
+                tokenData.ring.enabled = isDefaultLook;
+            }
+            if (preset.img) tokenData.ring.subject.texture = preset.img;
+        }
+    }
 
     tokenData.disposition = 1;
 
