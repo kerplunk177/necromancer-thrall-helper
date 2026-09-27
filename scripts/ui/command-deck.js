@@ -7490,8 +7490,14 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                             return ui.notifications.warn("You have no Focus Points remaining!");
                                         }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
-                                        const tokenCenter = tokenDoc.object?.center || { x: tokenDoc.x, y: tokenDoc.y };
                                         
+                                        const gridPx = canvas.scene.grid.size || canvas.grid.size;
+                                        const tWidth = tokenDoc.width || 1;
+                                        const tHeight = tokenDoc.height || 1;
+                                        const exactX = tokenDoc.x + ((tWidth * gridPx) / 2);
+                                        const exactY = tokenDoc.y + ((tHeight * gridPx) / 2);
+                                        const exactElevation = tokenDoc.elevation || 0;
+                                    
                                         window.aoeEasyResolveCache = {
                                             item: bombSpell,
                                             name: "Necrotic Bomb",
@@ -7500,25 +7506,25 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                             hazardDuration: null,
                                             originMessageId: null
                                         };
-    
-                                        const gridDist = canvas.scene?.grid?.distance || 5;
-                                        const tokenWidth = tokenDoc.width || 1;
-                                        const tokenRadiusFeet = (tokenWidth * gridDist) / 2;
-                                        const totalEmanationFeet = 10 + tokenRadiusFeet;
-    
+                                    
+                                        await executeDelete(tokenDoc.id);
+                                    
+                                        await new Promise(r => setTimeout(r, 100));
+                                    
                                         await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
                                             t: "circle", 
                                             user: game.user.id, 
-                                            x: tokenCenter.x, 
-                                            y: tokenCenter.y, 
-                                            distance: totalEmanationFeet, 
-                                            fillColor: "#660066"
+                                            x: exactX, 
+                                            y: exactY, 
+                                            distance: 13, 
+                                            fillColor: "#660066",
+                                            elevation: exactElevation,
+                                            flags: {
+                                                pf2e: {
+                                                    areaType: "burst"
+                                                }
+                                            }
                                         }]);
-    
-                                        await new Promise(r => setTimeout(r, 150));
-    
-                                        await executeDelete(tokenDoc.id);
-    
                                     }
                                 },
                                 cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
