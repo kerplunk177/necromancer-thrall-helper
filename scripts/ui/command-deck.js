@@ -1131,8 +1131,8 @@ Hooks.on("renderChatMessage", (message, html) => {
         `);
     } else {
         $html.find('.death-reaction-actions').each(function() {
-            const $container = $(this);
-            const $btn = $container.find('.blood-pool-spawn-btn, .inevitable-return-btn').first();
+            const $container =$(this);
+            const $btn =$container.find('.blood-pool-spawn-btn, .inevitable-return-btn').first();
             if ($btn.length > 0) {
                 const isBleed = $btn.attr("data-is-bleed") === "true";
                 const necroActor = game.actors.get($btn.attr("data-necro-id"));
@@ -1152,8 +1152,7 @@ Hooks.on("renderChatMessage", (message, html) => {
     const attackerToken = canvas?.tokens?.get(message.speaker?.token);
     const attackerActor = attackerToken?.actor || game.actors.get(message.speaker?.actor);
 
-    if (pf2eContext?.type === "attack-roll" && pf2eContext?.outcome === "criticalSuccess" && attackerActor?.items.some(i => i.name === "Effect: Bind Heroic Spirit") && $html.find('.heroic-spawn-btn').length === 0) {
-        $html.find('.message-content').append(`<button type="button" class="heroic-spawn-btn" data-target-id="${pf2eContext.target?.token || ""}" style="background: #4a3600; color: #ffcc00; font-weight: bold; border: 1px solid #ffcc00; margin-top: 5px;"><i class="fas fa-ghost"></i> Inspire Heroic Thrall</button>`);
+    if (pf2eContext?.type === "attack-roll" && pf2eContext?.outcome === "criticalSuccess" && attackerActor?.items.some(i => i.name === "Effect: Bind Heroic Spirit") && $html.find('.heroic-spawn-btn').length === 0) {$html.find('.message-content').append(`<button type="button" class="heroic-spawn-btn" data-target-id="${pf2eContext.target?.token || ""}" style="background: #4a3600; color: #ffcc00; font-weight: bold; border: 1px solid #ffcc00; margin-top: 5px;"><i class="fas fa-ghost"></i> Inspire Heroic Thrall</button>`);
     }
 
     const isPerfectedAttacker = attackerToken?.document?.getFlag("necromancer-thrall-helper", "isPerfectedThrall") || (message.speaker?.alias || "").includes("Perfected");
@@ -1172,76 +1171,14 @@ Hooks.on("renderChatMessage", (message, html) => {
     if (!casterId && canvas?.tokens?.controlled?.length > 0) casterId = canvas.tokens.controlled[0].actor?.id;
     const hasPermission = game.user.isGM || message.isAuthor || (casterId ? game.actors.get(casterId)?.isOwner : false);
 
-    const injectToggle = ($row, htmlString) => {
-        const $saveContainer = $row.find('.save-btn-container, .roll-save-btn').first();
-        if ($saveContainer.length > 0) {
-            $saveContainer.before(htmlString);
-        } else {
-            let targetNode = null;
-            $row.find('*').addBack().contents().each(function() {
-                if (this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing" || this.nodeValue.trim() === "Missed")) {
-                    targetNode = this;
-                }
-            });
-            if (targetNode) $(targetNode).before(htmlString);
-            else {
-                const $name = $row.find('.token-name').first();
-                if ($name.length > 0) $name.after(htmlString);
-                else $row.append(htmlString);
-            }
-        }
-    };
-
     const isErasCard = (itemName.includes("Necrotic Bomb") || itemName.includes("Necrotic Blast") || msgContent.includes("Necrotic Bomb") || msgContent.includes("Necrotic Blast")) && !isResolution;
-    
+
+    // We ONLY inject the CSS here. We let aoeEasyResolve.renderRow handle 100% of the buttons.
     if (isErasCard || itemName.includes("Desperate Revival") || itemName.includes("Dread Mosquito") || msgContent.includes("Desperate Revival") || msgContent.includes("Dread Mosquito")) {
         if ($html.find('#necro-bomb-style').length === 0) {
             $html.prepend(`<style id="necro-bomb-style">.necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; } .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .void-opt { border-radius: 3px 0 0 3px; } .vit-opt { border-radius: 0 3px 3px 0; } .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
         }
     }
-
-    if (isErasCard) {
-        if ($html.find('#necro-bomb-style').length === 0) {
-            $html.prepend(`<style id="necro-bomb-style">.necro-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .necro-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .necro-type-toggle button.active.void-opt { background: #660066; color: #fff; border-color: #990099; } .necro-type-toggle button.active.vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .void-opt { border-radius: 3px 0 0 3px; } .vit-opt { border-radius: 0 3px 3px 0; } .no-save-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
-        }
-        $html.find('[data-token-id]').each((i, el) => {
-            const $row = $(el);
-            const tokenId = $row.attr('data-token-id');
-            const targetToken = canvas?.tokens?.get(tokenId);
-            if (!targetToken?.actor) return;
-            
-            $row.find('.necro-type-toggle, .no-save-badge, .nuked-text').remove();
-            
-            const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-            const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-            const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
-            const hasDisease = targetToken.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
-
-            const cursorStyle = hasPermission ? 'pointer' : 'default';
-            const voidActive = currentType === 'void' ? 'active' : '';
-            const vitActive = currentType === 'vitality' ? 'active' : '';
-
-            injectToggle($row, `<div class="necro-type-toggle" data-token-id="${tokenId}"><button type="button" class="type-btn void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button><button type="button" class="type-btn vit-opt ${vitActive}" data-type="vitality" style="cursor: ${cursorStyle};">Vit</button></div>`);
-
-            const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
-            const $toggle = $row.find('.necro-type-toggle');
-
-            if (isUnaffected || hasDisease) {
-                $saveBtn.hide();
-                $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
-                
-                if (isUnaffected && $row.find('.no-save-badge').length === 0) {
-                    $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
-                } else if (hasDisease && $row.find('.no-save-badge').length === 0) {
-                    $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.75em; margin-left: 5px;">(Already Infected)</span>');
-                }
-            } else {
-                $saveBtn.show();
-                $row.find('.no-save-badge').remove();
-            }
-        });
-    }
-
     const isHarmCard = (itemName.includes("Harm") || msgContent.includes("Harm")) && !isResolution;
     if (isHarmCard && casterId) {
         const actor = game.actors.get(casterId);
@@ -1252,46 +1189,6 @@ Hooks.on("renderChatMessage", (message, html) => {
                 if ($html.find('#harm-toggle-style').length === 0) {
                     $html.prepend(`<style id="harm-toggle-style">.harm-type-toggle { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; } .harm-type-toggle button { margin: 0; padding: 2px 6px; font-size: 0.7em; line-height: 1; border: 1px solid #444; background: #222; color: #999; } .harm-type-toggle button.active.harm-void-opt { background: #660066; color: #fff; border-color: #990099; } .harm-type-toggle button.active.harm-vit-opt { background: #b58900; color: #fff; border-color: #e5a900; } .harm-type-toggle button.active.harm-heal-opt { background: #4ade80; color: #000; border-color: #22c55e; } .harm-void-opt { border-radius: 3px 0 0 3px; } .harm-vit-opt { border-radius: ${hasInvert ? '0' : '0 3px 3px 0'}; } .harm-heal-opt { border-radius: 0 3px 3px 0; } .aoe-heal-badge { font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px; white-space: nowrap; }</style>`);
                 }
-                $html.find('[data-token-id]').each((i, el) => {
-                    const $row = $(el);
-                    const tokenId = $row.attr('data-token-id');
-                    const targetToken = canvas?.tokens?.get(tokenId);
-                    if (!targetToken?.actor) return;
-                    
-                    $row.find('.harm-type-toggle, .aoe-heal-badge, .nuked-text').remove();
-                    
-                    const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
-                    const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-                    let isHealing = (currentState === "void" && negHeal) || currentState === "heal";
-                    let isUnaffected = (currentState === "vit" && !negHeal);
-
-                    const cursorStyle = hasPermission ? 'pointer' : 'default';
-                    const voidActive = currentState === 'void' ? 'active' : '';
-                    const vitActive = currentState === 'vit' ? 'active' : '';
-                    const healActive = currentState === 'heal' ? 'active' : '';
-
-                    const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt ${vitActive}" data-type="vit" style="cursor: ${cursorStyle};">Vit</button>` : '';
-                    const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt ${healActive}" data-type="heal" style="cursor: ${cursorStyle};">Heal</button>` : '';
-
-                    injectToggle($row, `<div class="harm-type-toggle" data-token-id="${tokenId}"><button type="button" class="harm-type-btn harm-void-opt ${voidActive}" data-type="void" style="cursor: ${cursorStyle};">Void</button>${vitButton}${healButton}</div>`);
-
-                    const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
-                    const $toggle = $row.find('.harm-type-toggle');
-
-                    if (isHealing || isUnaffected) {
-                        $saveBtn.hide();
-                        $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
-                        
-                        if (isHealing && $row.find('.aoe-heal-badge').length === 0) {
-                            $toggle.after('<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(AoE Heal)</span>');
-                        } else if (isUnaffected && $row.find('.no-save-badge').length === 0) {
-                            $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
-                        }
-                    } else {
-                        $saveBtn.show();
-                        $row.find('.aoe-heal-badge, .no-save-badge').remove();
-                    }
-                });
             }
         }
     }
@@ -1302,21 +1199,20 @@ Hooks.on("renderChatMessage", (message, html) => {
         const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
         if (hasArmor) {
             $html.find('[data-token-id]').each((i, el) => {
-                const $row = $(el);
+                const $row =$(el);
                 const tokenId = $row.attr('data-token-id');
                 if (tokenId === sacrificedId) return $row.remove();
                 const targetToken = canvas?.tokens?.get(tokenId);
                 if (!targetToken?.actor) return;
                 if (targetToken.actor.system?.details?.alliance === "party" || targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY || targetToken.actor.id === casterId || targetToken.document.getFlag("necromancer-thrall-helper", "masterId") === casterId) {
                     $row.find('.save-btn-container, .roll-save-btn').hide();
-                    if ($row.find('.bone-armor-badge').length === 0) $row.find('.token-name').after(' <span class="bone-armor-badge" style="color: #4ade80; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Bone Armor]</span>');
+                    if ($row.find('.bone-armor-badge').length === 0)$row.find('.token-name').after(' <span class="bone-armor-badge" style="color: #4ade80; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Bone Armor]</span>');
                 }
             });
             if ($html.find('.bone-armor-active-badge').length === 0) {
                 const badgeHtml = `<div class="bone-armor-active-badge" style="text-align: center; color: #4ade80; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-shield-alt"></i> Bone Armor Active</div>`;
                 const targetContainer = $html.find('.card-buttons').last();
-                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);
-                $html.find('.bone-armor-btn').remove();
+                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);$html.find('.bone-armor-btn').remove();
             }
         } else if (hasPermission && $html.find('.bone-armor-btn').length === 0) {
             const btnHtml = `<button type="button" class="bone-armor-btn" style="margin-top: 5px; margin-bottom: 5px; background: #2c1a3b; color: #fff; border: 1px solid #9900ff;"><i class="fas fa-shield-alt"></i> Consume Thrall for Bone Armor</button>`;
@@ -1331,12 +1227,11 @@ Hooks.on("renderChatMessage", (message, html) => {
         const sacrificedId = message.getFlag("necromancer-thrall-helper", "sacrificedThrallId");
         $html.find('.roll-all-npcs-btn, .apply-damage-btn').css("cssText", hasLimbs ? "display: flex !important;" : "display: none !important;");
         if (hasLimbs) {
-            $html.find('[data-token-id]').each((i, el) => { if ($(el).attr('data-token-id') === sacrificedId) $(el).remove(); });
+            $html.find('[data-token-id]').each((i, el) => { if ($(el).attr('data-token-id') === sacrificedId)$(el).remove(); });
             if ($html.find('.tsunami-active-badge').length === 0) {
                 const badgeHtml = `<div class="tsunami-active-badge" style="text-align: center; color: #ef4444; font-weight: bold; margin-top: 5px; margin-bottom: 5px; padding: 4px; background: rgba(0,0,0,0.4); border-radius: 4px;"><i class="fas fa-hands-helping"></i> Grasping Limbs Active (Escape DC ${aoeFlags.saveDC || 10})</div>`;
                 const targetContainer = $html.find('.card-buttons').last();
-                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);
-                $html.find('.tsunami-limb-btn').remove();
+                if (targetContainer.length > 0) targetContainer.after(badgeHtml); else $html.append(badgeHtml);$html.find('.tsunami-limb-btn').remove();
             }
         } else if (hasPermission && $html.find('.tsunami-limb-btn').length === 0) {
             const btnHtml = `<button type="button" class="tsunami-limb-btn" style="margin-top: 5px; margin-bottom: 5px; width: 100%; background: #3a0000; color: #fff; border: 1px solid #ef4444; padding: 5px; font-weight: bold;"><i class="fas fa-hand-holding-water"></i> Sacrifice Thrall for Grasping Limbs</button>`;
@@ -1347,13 +1242,19 @@ Hooks.on("renderChatMessage", (message, html) => {
 
     const customBtns = '.inevitable-return-btn, .flesh-terrain-btn, .blood-pool-spawn-btn, .gore-spawn-btn, .desperate-revival-trigger-btn, .heroic-spawn-btn, .perfected-spawn-btn, .tsunami-limb-btn, .bone-armor-btn, .type-btn, .necro-type-btn, .harm-type-btn';
     $html.off('click', customBtns).on('click', customBtns, async (e) => {
-        const $btn = $(e.currentTarget);
+        const $btn =$(e.currentTarget);
 
-        if ($btn.hasClass('type-btn') || $btn.hasClass('necro-type-btn')) {
+        if ($btn.is('.type-btn, .necro-type-btn')) {
             e.preventDefault(); e.stopPropagation();
             if (!hasPermission) return;
             const type = $btn.attr('data-type');
-            const tokenId = $btn.closest('.necro-type-toggle').attr('data-token-id');
+            
+            let tokenId = $btn.closest('.necro-custom-controls').attr('data-token-id');
+            if (!tokenId) {
+                tokenId = $btn.closest('.necro-type-toggle').attr('data-token-id');
+            }
+            if (!tokenId) return;
+
             await message.setFlag("necromancer-thrall-helper", `dmgType_${tokenId}`, type);
             return;
         }
@@ -1362,8 +1263,34 @@ Hooks.on("renderChatMessage", (message, html) => {
             e.preventDefault(); e.stopPropagation();
             if (!hasPermission) return;
             const type = $btn.attr('data-type');
-            const tokenId = $btn.closest('.harm-type-toggle').attr('data-token-id');
-            await message.setFlag("necromancer-thrall-helper", `harmState_${tokenId}`, type);
+
+            let tokenId = $btn.closest('.necro-custom-controls').attr('data-token-id');
+            if (!tokenId) {
+                tokenId = $btn.closest('.harm-type-toggle').attr('data-token-id');
+            }
+            if (!tokenId) return;
+
+            const token = canvas.tokens.get(tokenId);
+            let negHeal = false;
+            if (token && token.actor && token.actor.system && token.actor.system.attributes && token.actor.system.attributes.hp) {
+                negHeal = token.actor.system.attributes.hp.negativeHealing || false;
+            }
+            
+            let isHealingTarget = false;
+            if (type === "void" && negHeal) isHealingTarget = true;
+            if (type === "vit" && !negHeal) isHealingTarget = true;
+            if (type === "heal") isHealingTarget = true;
+
+            await message.update({
+                [`flags.necromancer-thrall-helper.harmState_${tokenId}`]: type,
+                [`flags.aoe-easy-resolve.targets.${tokenId}.isHealing`]: isHealingTarget,
+                [`flags.aoe-easy-resolve.targets.${tokenId}.isImmune`]: false
+            });
+            
+            const aoeApi = game.modules.get("aoe-easy-resolve")?.api;
+            if (aoeApi && aoeApi.refreshCard) {
+                setTimeout(() => aoeApi.refreshCard(message.id), 50);
+            }
             return;
         }
         if ($btn.hasClass('inevitable-return-btn')) {
@@ -1635,6 +1562,7 @@ Hooks.on("renderChatMessage", (message, html) => {
 
 
 Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
+    if ($row.prop("tagName") === "BUTTON") return;
     const aoeFlags = message.flags?.["aoe-easy-resolve"] || {};
     const itemName = aoeFlags.itemName || message.flavor || message.content || "";
     const isResolution = message.content?.includes("Resolution Summary") || aoeFlags.isResolution;
@@ -1646,6 +1574,7 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
     const isGrabCard = itemName === "Conglomerate Grab" || itemName.includes("Conglomerate Grab");
     const isTsunamiCard = itemName.includes("Flesh Tsunami");
     const isMosquitoCard = itemName.includes("Dread Mosquito");
+    
     if (!isDesperateCard && !isErasCard && !isHarmCard && !isGrabCard && !isTsunamiCard && !isMosquitoCard) return;
 
     let casterId = message.speaker?.actor;
@@ -1662,102 +1591,87 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
     if (isTsunamiCard) {
         const hasLimbs = message.getFlag("necromancer-thrall-helper", "limbsActivated");
         const targetData = aoeFlags.targets?.[tokenId];
-        
         if (targetData?.isImmune) {
             $row.find('.save-btn-container, .roll-save-btn').css("cssText", "display: none !important;");
-            if ($row.find('.miss-badge').length === 0) {
-                $row.find('.token-name').after(' <span class="miss-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Immune]</span>');
-            }
+            if ($row.find('.miss-badge').length === 0)$row.find('.token-name').after(' <span class="miss-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Immune]</span>');
             return;
         }
-
         if (!hasLimbs) {
             $row.find('.save-btn-container, .roll-save-btn').css("cssText", "display: none !important;");
-            if ($row.find('.terrain-badge').length === 0) {
-                $row.find('.token-name').after(' <span class="terrain-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Greater Difficult Terrain]</span>');
-            }
+            if ($row.find('.terrain-badge').length === 0)$row.find('.token-name').after(' <span class="terrain-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Greater Difficult Terrain]</span>');
         } else {
             $row.find('.save-btn-container, .roll-save-btn').css("cssText", "display: flex !important;");
             $row.find('.terrain-badge').remove();
         }
         return;
     }
+
+    if (isGrabCard) {
+        const targetData = aoeFlags.targets?.[tokenId];
+        if (targetData?.isImmune) {
+            $row.find('.save-btn-container, .roll-save-btn').hide();
+            if ($row.find('.miss-badge').length === 0)$row.find('.token-name').after(' <span class="miss-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Missed]</span>');
+        }
+        return;
+    }
+
     const actor = game.actors.get(casterId);
     const isCaster = casterId ? actor?.isOwner : false;
     const hasPermission = game.user.isGM || message.isAuthor || isCaster;
     const targetToken = canvas?.tokens?.get(tokenId);
     if (!targetToken?.actor) return;
 
+    // --- 1. THE SCRUBBER: Destroy all ghosts baked into the database HTML ---
+    $row.find('.necro-type-toggle, .harm-type-toggle, .no-save-badge, .aoe-heal-badge').remove();$row.find('*').addBack().contents().filter(function() {
+        return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing");
+    }).each(function() { this.nodeValue = ''; });
+
+    // --- 2. THE INJECTOR: Safely inserts without duplicating ---
     const injectToggle = ($r, htmlString) => {
-        const $saveContainer = $r.find('.save-btn-container, .roll-save-btn').first();
+        const $controls =$(htmlString);
+        const $saveContainer =$r.find('.save-btn-container, .roll-save-btn, .er-save-btn-container').first();
         if ($saveContainer.length > 0) {
-            $saveContainer.before(htmlString);
+            $saveContainer.before($controls);
         } else {
-            let targetNode = null;
-            $r.find('*').addBack().contents().each(function() {
-                if (this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing" || this.nodeValue.trim() === "Missed")) {
-                    targetNode = this;
-                }
-            });
-            if (targetNode) $(targetNode).before(htmlString);
-            else {
-                const $name = $r.find('.token-name').first();
-                if ($name.length > 0) $name.after(htmlString);
-                else $r.append(htmlString);
-            }
+            const $name =$r.find('.token-name').first();
+            if ($name.length > 0) $name.after($controls);
+            else $r.append($controls);
         }
     };
-
-    if (isGrabCard) {
-        const targetData = aoeFlags.targets?.[tokenId];
-        if (targetData?.isImmune) {
-            $row.find('.save-btn-container, .roll-save-btn').hide();
-            if ($row.find('.miss-badge').length === 0) $row.find('.token-name').after(' <span class="miss-badge" style="color: #999; font-size: 0.8em; font-weight: bold; margin-left: 5px;">[Missed]</span>');
-        }
-        return;
-    }
 
     if (isDesperateCard || isErasCard || isMosquitoCard) {
         if (isDesperateCard && !actor?.items.some(i => i.name === "Mastery of Life and Death" || i.slug === "mastery-of-life-and-death")) return;
 
         const currentType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-        
-        if ($row.find('.necro-type-toggle').length === 0) {
-            const cursorStyle = hasPermission ? 'pointer' : 'default';
-            const getBg = (type) => currentType === type ? (type === 'void' ? '#660066' : '#b58900') : '#222';
-            const getColor = (type) => currentType === type ? '#fff' : '#999';
-
-            const toggleHtml = `
-                <div class="necro-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
-                    <button type="button" class="necro-type-btn void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
-                    <button type="button" class="necro-type-btn vit-opt" data-type="vitality" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vitality')}; color: ${getColor('vitality')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Vit</button>
-                </div>
-            `;
-            injectToggle($row, toggleHtml);
-        }
+        const cursorStyle = hasPermission ? 'pointer' : 'default';
+        const getBg = (type) => currentType === type ? (type === 'void' ? '#660066' : '#b58900') : '#222';
+        const getColor = (type) => currentType === type ? '#fff' : '#999';
 
         const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
         const isUnaffected = (currentType === 'vitality' && !negHeal) || (currentType === 'void' && negHeal);
         const hasDisease = isMosquitoCard && targetToken.actor.items.some(i => i.getFlag("necromancer-thrall-helper", "isNecroticBlood"));
 
-        const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
-        const $healBadge = $row.find('span:contains("Healing")');
-        const $toggle = $row.find('.necro-type-toggle');
+        let badgeHtml = "";
+        if (isUnaffected) badgeHtml = '<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.85em; margin-left: 8px;">(Unaffected)</span>';
+        else if (hasDisease) badgeHtml = '<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.85em; margin-left: 8px;">(Already Infected)</span>';
+
+        const toggleHtml = `
+            <div class="necro-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: auto; justify-content: flex-end;">
+                <div style="display: inline-flex; border-radius: 3px;">
+                    <button type="button" class="necro-type-btn void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
+                    <button type="button" class="necro-type-btn vit-opt" data-type="vitality" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vitality')}; color: ${getColor('vitality')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Vit</button>
+                </div>
+                ${badgeHtml}
+            </div>
+        `;
         
+        injectToggle($row, toggleHtml);
+        
+        const $saveBtn =$row.find('.roll-save-btn, .save-btn-container, .er-save-btn-container');
         if (isUnaffected || hasDisease) {
             $saveBtn.hide();
-            $healBadge.hide();
-            $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
-            
-            if (isUnaffected && $row.find('.no-save-badge').length === 0) {
-                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
-            } else if (hasDisease && $row.find('.no-save-badge').length === 0) {
-                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #888; font-size: 0.75em; margin-left: 5px;">(Already Infected)</span>');
-            }
         } else {
             $saveBtn.show();
-            $healBadge.hide(); 
-            $row.find('.no-save-badge').remove();
         }
     }
 
@@ -1768,47 +1682,39 @@ Hooks.on("aoeEasyResolve.renderRow", async (message, $row, tokenId) => {
         if (!hasMastery && !hasInvert) return;
 
         const currentState = message.getFlag("necromancer-thrall-helper", `harmState_${tokenId}`) || "void";
-        
-        if ($row.find('.harm-type-toggle').length === 0) {
-            const cursorStyle = hasPermission ? 'pointer' : 'default';
-            const getBg = (type) => currentState === type ? (type === 'void' ? '#660066' : type === 'vit' ? '#b58900' : '#4ade80') : '#222';
-            const getColor = (type) => currentState === type && type === 'heal' ? '#000' : (currentState === type ? '#fff' : '#999');
+        const cursorStyle = hasPermission ? 'pointer' : 'default';
+        const getBg = (type) => currentState === type ? (type === 'void' ? '#660066' : type === 'vit' ? '#b58900' : '#4ade80') : '#222';
+        const getColor = (type) => currentState === type && type === 'heal' ? '#000' : (currentState === type ? '#fff' : '#999');
 
-            const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt" data-type="vit" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vit')}; color: ${getColor('vit')}; border: 1px solid #444; border-radius: ${hasInvert ? '0' : '0 3px 3px 0'};">Vit</button>` : '';
-            const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt" data-type="heal" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('heal')}; color: ${getColor('heal')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Heal</button>` : '';
+        const vitButton = hasMastery ? `<button type="button" class="harm-type-btn harm-vit-opt" data-type="vit" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('vit')}; color: ${getColor('vit')}; border: 1px solid #444; border-radius: ${hasInvert ? '0' : '0 3px 3px 0'};">Vit</button>` : '';
+        const healButton = hasInvert ? `<button type="button" class="harm-type-btn harm-heal-opt" data-type="heal" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('heal')}; color: ${getColor('heal')}; border: 1px solid #444; border-radius: 0 3px 3px 0;">Heal</button>` : '';
 
-            const toggleHtml = `
-                <div class="harm-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle;">
+        const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
+        const isHealing = (currentState === "void" && negHeal) || currentState === "heal";
+        const isUnaffected = (currentState === "vit" && !negHeal);
+
+        let badgeHtml = "";
+        if (isHealing) badgeHtml = '<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.85em; margin-left: 8px;">(AoE Heal)</span>';
+        else if (isUnaffected) badgeHtml = '<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.85em; margin-left: 8px;">(Unaffected)</span>';
+
+        const toggleHtml = `
+            <div class="harm-type-toggle" data-token-id="${tokenId}" style="display: inline-flex; align-items: center; margin-left: auto; justify-content: flex-end;">
+                <div style="display: inline-flex; border-radius: 3px;">
                     <button type="button" class="harm-type-btn harm-void-opt" data-type="void" style="cursor: ${cursorStyle}; padding: 2px 6px; font-size: 0.7em; background: ${getBg('void')}; color: ${getColor('void')}; border: 1px solid #444; border-radius: 3px 0 0 3px;">Void</button>
                     ${vitButton}
                     ${healButton}
                 </div>
-            `;
-            injectToggle($row, toggleHtml);
-        }
+                ${badgeHtml}
+            </div>
+        `;
 
-        const negHeal = targetToken.actor.system.attributes.hp?.negativeHealing || false;
-        let isHealing = (currentState === "void" && negHeal) || currentState === "heal";
-        let isUnaffected = (currentState === "vit" && !negHeal);
-
-        const $saveBtn = $row.find('.roll-save-btn, .save-btn-container');
-        const $nativeHealBadge = $row.find('span:contains("Healing")');
-        const $toggle = $row.find('.harm-type-toggle');
-
+        injectToggle($row, toggleHtml);
+        
+        const $saveBtn =$row.find('.roll-save-btn, .save-btn-container, .er-save-btn-container');
         if (isHealing || isUnaffected) {
             $saveBtn.hide();
-            $nativeHealBadge.hide();
-            $row.find('*').addBack().contents().filter(function() { return this.nodeType === 3 && (this.nodeValue.trim() === "Immune" || this.nodeValue.trim() === "Healing"); }).each(function() { this.nodeValue = ''; });
-            
-            if (isHealing && $row.find('.aoe-heal-badge').length === 0) {
-                $toggle.after('<span class="aoe-heal-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(AoE Heal)</span>');
-            } else if (isUnaffected && $row.find('.no-save-badge').length === 0) {
-                $toggle.after('<span class="no-save-badge" style="font-weight: bold; color: #4ade80; font-size: 0.75em; margin-left: 5px;">(Unaffected)</span>');
-            }
         } else {
             $saveBtn.show();
-            $nativeHealBadge.hide();
-            $row.find('.aoe-heal-badge, .no-save-badge').remove();
         }
     }
 });
