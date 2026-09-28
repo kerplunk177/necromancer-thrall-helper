@@ -7448,35 +7448,39 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         if (exactDC === 10 && actor.system?.attributes?.classDC?.dc) {
                             exactDC = actor.system.attributes.classDC.dc.value;
                         }
-
+                    
                         let bombSpell = actor.items.find(i => i.type === "spell" && i.name === "Necrotic Bomb");
                         const spellSystemData = {
                             level: { value: bombRank },
                             traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "void"] },
                             tradition: { value: "divine" },
-                        area: { type: "emanation", value: 10 },
-                        target: { value: "creatures" }, 
-                        defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
-                        damage: { "0": { formula: `${bombRank}d12`, type: "void" } }
-                    };
-
-                    if (!bombSpell) {
-                        const spellData = { name: "Necrotic Bomb", type: "spell", img: "icons/magic/death/projectile-skull-flaming-green.webp", system: spellSystemData };
-                        const created = await actor.createEmbeddedDocuments("Item", [spellData]);
-                        bombSpell = created[0];
-                    } else {
-                        await bombSpell.update({ system: spellSystemData });
-                    }
-
-                    await bombSpell.setFlag("aoe-easy-resolve", "useCustomDamage", true);
-                    await bombSpell.setFlag("aoe-easy-resolve", "customDamage", `${bombRank}d12`);
-                    await bombSpell.setFlag("aoe-easy-resolve", "customDamageType", "void");
-                    await bombSpell.setFlag("aoe-easy-resolve", "useOverride", true);
-                    await bombSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
-                    await bombSpell.setFlag("aoe-easy-resolve", "saveType", "fortitude");
-                    await bombSpell.setFlag("aoe-easy-resolve", "allyBaseEffect", "standard");
-                    await bombSpell.setFlag("aoe-easy-resolve", "enemyBaseEffect", "standard");
-
+                            // Let PF2e handle the native emanation math
+                            area: { type: "emanation", value: 10 },
+                            target: { value: "creatures" }, 
+                            defense: { save: { statistic: "fortitude", basic: true, dc: { value: exactDC } } },
+                            damage: { "0": { formula: `${bombRank}d12`, type: "void" } }
+                        };
+                    
+                        if (!bombSpell) {
+                            const spellData = { name: "Necrotic Bomb", type: "spell", img: "icons/magic/death/projectile-skull-flaming-green.webp", system: spellSystemData };
+                            const created = await actor.createEmbeddedDocuments("Item", [spellData]);
+                            bombSpell = created[0];
+                        } else {
+                            await bombSpell.update({ system: spellSystemData });
+                        }
+                    
+                        await bombSpell.setFlag("aoe-easy-resolve", "customDamage", `${bombRank}d12`);
+                        await bombSpell.setFlag("aoe-easy-resolve", "customDamageType", "void");
+                        await bombSpell.setFlag("aoe-easy-resolve", "useOverride", true);
+                        await bombSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
+                        await bombSpell.setFlag("aoe-easy-resolve", "saveType", "fortitude");
+                        await bombSpell.setFlag("aoe-easy-resolve", "allyBaseEffect", "standard");
+                        await bombSpell.setFlag("aoe-easy-resolve", "enemyBaseEffect", "standard");
+                        await bombSpell.setFlag("aoe-easy-resolve", "useCustomDamage", true);
+                        
+                        // Turn OFF the custom AoE Easy Resolve button to prevent duplicates
+                        await bombSpell.setFlag("aoe-easy-resolve", "provideTemplate", false);
+                    
                         new Dialog({
                             title: "Necrotic Bomb",
                             content: `<p>Detonate <b>${tokenDoc.name}</b> for <b>${bombRank}d12</b> damage in a 10-foot emanation?</p>`,
@@ -7484,19 +7488,20 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 explode: {
                                     icon: '<i class="fas fa-radiation"></i>',
                                     label: "Detonate",
-                                    callback: async () => {
+                                    callback: async (html, e) => {
                                         const currentFocus = actor.system?.resources?.focus?.value || 0;
                                         if (currentFocus <= 0) {
                                             return ui.notifications.warn("You have no Focus Points remaining!");
                                         }
                                         if (currentFocus > 0) await actor.update({ "system.resources.focus.value": currentFocus - 1 });
-                                        
-                                        const gridPx = canvas.scene.grid.size || canvas.grid.size;
-                                        const tWidth = tokenDoc.width || 1;
-                                        const tHeight = tokenDoc.height || 1;
-                                        const exactX = tokenDoc.x + ((tWidth * gridPx) / 2);
-                                        const exactY = tokenDoc.y + ((tHeight * gridPx) / 2);
-                                        const exactElevation = tokenDoc.elevation || 0;
+                                    
+                                        const gridSize = canvas.scene.grid.size;
+                                        const originX = tokenDoc.x;
+                                        const originY = tokenDoc.y;
+                                        const tWidth = (tokenDoc.width || 1) * gridSize;
+                                        const tHeight = (tokenDoc.height || 1) * gridSize;
+                                    
+                                        await executeDelete(tokenDoc.id);
                                     
                                         window.aoeEasyResolveCache = {
                                             item: bombSpell,
@@ -7507,24 +7512,29 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                             originMessageId: null
                                         };
                                     
-                                        await executeDelete(tokenDoc.id);
-                                    
-                                        await new Promise(r => setTimeout(r, 100));
-                                    
-                                        await canvas.scene.createEmbeddedDocuments("MeasuredTemplate", [{
-                                            t: "circle", 
-                                            user: game.user.id, 
-                                            x: exactX, 
-                                            y: exactY, 
-                                            distance: 13, 
-                                            fillColor: "#660066",
-                                            elevation: exactElevation,
-                                            flags: {
-                                                pf2e: {
-                                                    areaType: "burst"
-                                                }
-                                            }
+                                        const [marker] = await canvas.scene.createEmbeddedDocuments("Drawing", [{
+                                            author: game.user.id,
+                                            shape: { type: "e", width: tWidth, height: tHeight },
+                                            x: originX,
+                                            y: originY,
+                                            fillType: 1,
+                                            fillColor: "#ff3333",
+                                            fillAlpha: 0.5,
+                                            strokeWidth: 2,
+                                            strokeColor: "#ffffff",
+                                            text: "Bomb",
+                                            fontSize: 24,
+                                            textColor: "#ffffff"
                                         }]);
+                                    
+                                        setTimeout(async () => {
+                                            if (canvas.scene && canvas.scene.drawings.has(marker.id)) {
+                                                await canvas.scene.deleteEmbeddedDocuments("Drawing", [marker.id]);
+                                            }
+                                        }, 20000);
+                                    
+                                        await bombSpell.toMessage(e);
+                                        ui.notifications.info(`Click the Emanation button in chat and center it on the Bomb marker.`);
                                     }
                                 },
                                 cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
