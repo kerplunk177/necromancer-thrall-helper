@@ -1512,7 +1512,7 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
                             const pos = ev.data.getLocalPosition(canvas.app.stage), snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
                             const basePayload = await prepareThrallPayload(attacker, selections[currentSpawnIndex]);
                             if (!basePayload) { return cleanUp(); }
-                            executeSpawn(foundry.utils.mergeObject(basePayload, { x: snapped.x, y: snapped.y, delta: { ownership: { [game.user.id]: 3 } } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
+                            executeSpawn(foundry.utils.mergeObject(basePayload, { x: snapped.x, y: snapped.y, elevation: targetToken?.document?.elevation || attacker?.getActiveTokens()[0]?.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 } } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
                             currentSpawnIndex++;
                             if (currentSpawnIndex < count) { ui.notifications.info(`Place Thrall ${currentSpawnIndex + 1}.`); canvas.stage.once("pointerdown", interactionHandler); }
                             else { cleanUp(); $btn.remove(); ui.notifications.info("All blood thralls sprouted."); }
@@ -1580,7 +1580,7 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
                             const basePayload = await prepareThrallPayload(attackerActor, dialogHtml.find('#heroic-preset').val());
                             if (!basePayload) return;
                             const newOwnership = { default: 0 }; Object.keys(attackerActor.ownership || {}).filter(k => attackerActor.ownership[k] === 3 && k !== "default").forEach(id => newOwnership[id] = 3); newOwnership[game.user.id] = 3;
-                            executeSpawn(foundry.utils.mergeObject(basePayload, { actorLink: false, x: snapped.x, y: snapped.y, delta: { ownership: newOwnership } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
+                            executeSpawn(foundry.utils.mergeObject(basePayload, { actorLink: false, x: snapped.x, y: snapped.y, elevation: targetToken?.document?.elevation || attackerActor?.getActiveTokens()[0]?.document?.elevation || 0, delta: { ownership: newOwnership } })).catch(() => ui.notifications.error("Failed to materialize the thrall."));
                         };
                         canvas.stage.once("pointerdown", interactionHandler);
                     }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
@@ -2165,8 +2165,13 @@ Hooks.on("createToken", async (tokenDoc, options, userId) => {
     const masterActor = game.actors.get(masterId) || canvas.scene.tokens.get(masterId)?.actor;
     if (!masterActor) return;
 
+    const activeNecroToken = masterActor.getActiveTokens().find(t => t.scene?.id === tokenDoc.parent?.id);
+    if (activeNecroToken && activeNecroToken.document.elevation !== tokenDoc.elevation) {
+        await tokenDoc.update({ elevation: activeNecroToken.document.elevation });
+    }
+
     const isCustomThrall = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") === masterId;
-    const hasConjurer = masterActor.items.some(i => ["spell", "feat", "action"].includes(i.type) && i.name.toLowerCase().includes("conjurer of corpses"));
+    const hasConjurer = masterActor.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("conjurer of corpses") || (i.system?.slug && i.system.slug.includes("conjurer-of-corpses"))));
     const traits = actor.system?.traits?.value || [];
     const isUndead = traits.includes("undead") || traits.some(tr => typeof tr === "string" && tr.toLowerCase() === "undead");
     const isNativeSummon = hasConjurer && isUndead && (actor.getFlag("pf2e", "master")?.id === masterId || tokenDoc.name.includes(masterActor.name));
@@ -3035,6 +3040,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     actorLink: false, 
                     ownership: { [game.user.id]: 3 }, 
                     flags: { "necromancer-thrall-helper": { masterId: actor.id, isPerfectedThrall: true } },
+                    elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                     delta: { ownership: { [game.user.id]: 3 } }
                 });
 
@@ -3584,6 +3590,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
                     applyCustomVisuals(finalPayload, actor, "lancer");
@@ -3711,6 +3718,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
                     applyCustomVisuals(finalPayload, actor, "nightmare");
@@ -3897,6 +3905,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     name: "Shed Corpse",
                     x: spawnX, 
                     y: spawnY,
+                    elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                     width: 1,
                     height: 1,
                     texture: { src: "systems/pf2e/icons/spells/animate-dead.webp", scaleX: 1, scaleY: 1 },
@@ -4258,6 +4267,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     const finalPayload = foundry.utils.mergeObject(basePayload, {
                                         x: snapped.x,
                                         y: snapped.y,
+                                        elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                                         delta: { ownership: { [game.user.id]: 3 } }
                                     });
 
@@ -8534,6 +8544,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { 
                             ownership: { [game.user.id]: 3 }, 
                             system: { attributes: { hp: { value: totalHP, max: totalHP } } }
@@ -8705,6 +8716,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
                         flags: { "necromancer-thrall-helper": { masterId: actor.id, tendrilTetherId: tetherId } },
+                        elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
                     applyCustomVisuals(finalPayload, actor, "conglom");
