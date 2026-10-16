@@ -64,9 +64,14 @@ Hooks.on("getSceneControlButtons", (controls) => {
             if (!isNecro) {
                 return ui.notifications.warn("You lack the dark blood and discipline required to command the dead.");
             }
-
             try {
-                new ThrallCommandDeck().render(true);
+                const existing = foundry.applications.instances.get("thrall-command-deck");
+                if (existing) {
+                    existing.render({ force: true });
+                    existing.bringToFront?.();
+                } else {
+                    new ThrallCommandDeck().render(true);
+                }
             } catch (e) {
                 console.warn("Necromancer Helper | Command Deck failed to open:", e);
             }

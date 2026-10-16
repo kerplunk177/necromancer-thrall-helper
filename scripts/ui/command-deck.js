@@ -1,6 +1,6 @@
 import { prepareThrallPayload, getThrallPresets } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
-import { executeSpawn, executeDelete, executeHazard, executeDamage } from "../system/socket.js";
+import { executeSpawn, executeDelete, executeHazard } from "../system/socket.js";
 
 
 globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
@@ -547,17 +547,7 @@ Hooks.on("preDeleteToken", (tokenDoc, options, userId) => {
         return false;
     }
 });
-Hooks.on("pf2e.restForTheNight", async (actor) => {
-    if (actor.getFlag("necromancer-thrall-helper", "consumeThrallUsed")) {
-        await actor.unsetFlag("necromancer-thrall-helper", "consumeThrallUsed");
-    }
-    if (actor.getFlag("necromancer-thrall-helper", "desperateRevivalUsed")) {
-        await actor.unsetFlag("necromancer-thrall-helper", "desperateRevivalUsed");
-    }
-    if (actor.getFlag("necromancer-thrall-helper", "instantArmyUsed")) {
-        await actor.unsetFlag("necromancer-thrall-helper", "instantArmyUsed");
-    }
-});
+
 
 Hooks.on("deleteItem", async (itemDoc, options, userId) => {
     if (game.user.id !== userId || itemDoc.type !== "effect" || !itemDoc.getFlag("necromancer-thrall-helper", "isHazardTracker")) return;
@@ -744,6 +734,7 @@ if (hasFleshFascination) {
         }
 
         if (game.combat) {
+            const combatRoundKey = `${game.combat.id}-${game.combat.round}`;
             await masterActor.setFlag("necromancer-thrall-helper", "thickSkinRound", combatRoundKey);
         }
 
@@ -2651,52 +2642,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             }
         });
         
-        this._onTokenDelete = Hooks.on("deleteToken", async (doc) => {
+        this._onTokenDelete = Hooks.on("deleteToken", () => {
             if (this.rendered) this.render({ force: false });
-            
-            // --- Song of the Soul Death Tracker ---
-            if (canvas.scene) {
-                for (const t of canvas.scene.tokens) {
-                    if (t.actor) {
-                        const recipientEffects = t.actor.items.filter(i => 
-                            i.name === "Effect: Song of the Soul (Recipient)" && 
-                            i.getFlag("necromancer-thrall-helper", "instrumentId") === doc.id
-                        );
-                        for (const effect of recipientEffects) {
-                            await effect.delete();
-                            ChatMessage.create({
-                                speaker: ChatMessage.getSpeaker({ actor: t.actor }),
-                                flavor: `<strong>Song of the Soul</strong>`,
-                                content: `<p>The ethereal melody abruptly ends as the instrument is destroyed. <b>${t.name}'s</b> Fast Healing fades.</p>`
-                            });
-                        }
-                    }
-                }
-            }
-
-            const tetherId = doc.getFlag("necromancer-thrall-helper", "tendrilTetherId");
-            if (tetherId && canvas.scene) {
-                const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId);
-                for (const r of regions) {
-                    if (r.canUserModify(game.user, "delete")) await r.delete();
-                }
-                const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId);
-                for (const d of drawings) {
-                    if (d.canUserModify(game.user, "delete")) await d.delete();
-                }
-            }
-
-            const isHordeAnchor = doc.getFlag("necromancer-thrall-helper", "isHordeAnchor");
-            if (isHordeAnchor && canvas.scene) {
-                const regions = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "anchorId") === doc.id);
-                for (const r of regions) {
-                    if (r.canUserModify(game.user, "delete")) await r.delete();
-                }
-                const drawings = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "anchorId") === doc.id);
-                for (const d of drawings) {
-                    if (d.canUserModify(game.user, "delete")) await d.delete();
-                }
-            }
         });
 
         this._onActorUpdate = Hooks.on("updateActor", (doc, changes) => {
@@ -2730,6 +2677,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         const mapPenalty = this.currentMap !== undefined ? this.currentMap : 0;
         
         let activeThralls = [];
+        const necroToken = actor?.getActiveTokens()?.[0] || canvas.tokens?.placeables?.find(t => t.actor?.id === this.necroId);
+
         if (canvas.scene && this.necroId) {
             const hasConjurer = actor?.items.some(i => ["spell", "feat", "action"].includes(i.type) && (i.name.toLowerCase().includes("conjurer of corpses") || (i.system?.slug && i.system.slug.includes("conjurer-of-corpses")))) || false;
 
@@ -2798,12 +2747,32 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 
                 const isGraveyard = t.name.includes("Living Graveyard");
 
+                let distToMaster = null;
+                if (necroToken && tokenObj) {
+                    if (typeof tokenObj.distanceTo === "function") {
+                        distToMaster = Math.round(tokenObj.distanceTo(necroToken));
+                    } else {
+                        const dx = Math.abs(tokenObj.x - necroToken.x);
+                        const dy = Math.abs(tokenObj.y - necroToken.y);
+                        distToMaster = Math.round((Math.max(dx, dy) / canvas.grid.size) * (canvas.scene?.grid?.distance || 5));
+                    }
+                }
+                const hasMasterDist = distToMaster !== null;
+                const within30ft = !hasMasterDist || distToMaster <= 30;
+                const within60ft = !hasMasterDist || distToMaster <= 60;
+                const distClass = !hasMasterDist ? "" : (distToMaster > 60 ? "out-far" : (distToMaster > 30 ? "out-mid" : "in-range"));
+
                 return {
                     id: t.id,
                     name: t.name,
                     img: imgPath,
                     nearbyEnemies: nearbyEnemies,
                     nearbyFriendlies: nearbyFriendlies,
+                    distToMaster: distToMaster,
+                    hasMasterDist: hasMasterDist,
+                    within30ft: within30ft,
+                    within60ft: within60ft,
+                    distClass: distClass,
                     isConglomerate: t.name.toLowerCase().includes("conglomerate"),
                     isLivingGraveyard: isGraveyard
                 };
@@ -2822,6 +2791,11 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         const hasPuppeteer = actor?.items.some(i => i.name.toLowerCase().includes("puppeteer") || (i.system?.slug && i.system.slug.includes("puppeteer"))) || false;
         const consumeUsed = actor?.getFlag("necromancer-thrall-helper", "consumeThrallUsed") || false;
         const currentFP = actor?.system?.resources?.focus?.value || 0;
+        const maxFocus = Math.min(3, actor?.system?.resources?.focus?.max || 0);
+        const focusPips = [];
+        for (let i = 1; i <= maxFocus; i++) {
+            focusPips.push({ index: i, filled: i <= currentFP });
+        }
         
         let consumeText = "Consume Thrall";
         let consumeDisabled = false;
@@ -2874,7 +2848,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         const isCorruptedActive = actor?.items.some(i => i.type === "effect" && i.name === "Effect: Corrupted Ground") || false;
         const hasDeathlyScream = hasSpell("Deathly Scream");
 
-        const activeHordes = canvas.scene?.regions?.filter(r => r.getFlag("necromancer-thrall-helper", "masterId") === this.necroId && r.getFlag("necromancer-thrall-helper", "hordeId")) || [];
+        const activeHordes = [];
         const activeGores = canvas.scene?.regions?.filter(r => r.getFlag("necromancer-thrall-helper", "goreRegionId")) || [];
 
         return {
@@ -2894,6 +2868,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             hasSongOfTheSoul: hasSongOfTheSoul,
             actorName: actor?.name || "Necromancer",
             actorLevel: actor?.level || 1,
+            maxFocus: maxFocus,
+            focusPips: focusPips,
             hasBonyBarrage: hasBonyBarrage,
             hasCalcification: hasCalcification,
             activeStormCount: activeStorms.length,
@@ -2938,6 +2914,74 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
+        const startCanvasPlacement = (cleanUpFn) => {
+            if (globalThis.NecroThrallHelper._activePlacementCleanUp) {
+                globalThis.NecroThrallHelper._activePlacementCleanUp();
+            }
+            globalThis.NecroThrallHelper._activePlacementCleanUp = () => {
+                globalThis.NecroThrallHelper._activePlacementCleanUp = null;
+                cleanUpFn();
+            };
+            return globalThis.NecroThrallHelper._activePlacementCleanUp;
+        };
+
+        const attachGhostHUD = (ghost, { width = canvas.grid.size, height = canvas.grid.size, necroCenter = null, maxRange = null, getCountText = null } = {}) => {
+            const overlay = new PIXI.Graphics();
+            overlay.beginFill(0xff0000, 0.35);
+            overlay.lineStyle(3, 0xff0000, 1);
+            overlay.drawRect(0, 0, width, height);
+            overlay.endFill();
+            overlay.moveTo(0, 0);
+            overlay.lineTo(width, height);
+            overlay.moveTo(width, 0);
+            overlay.lineTo(0, height);
+            overlay.visible = false;
+            ghost.addChild(overlay);
+
+            const fontSize = Math.max(28, Math.round((canvas.grid?.size || 100) * 0.32));
+            const badge = new PIXI.Text("", {
+                fontFamily: "Signika",
+                fontSize: fontSize,
+                fontWeight: "bold",
+                fill: 0x4ade80,
+                stroke: 0x000000,
+                strokeThickness: Math.max(5, Math.round(fontSize * 0.2)),
+                dropShadow: true,
+                dropShadowColor: 0x000000,
+                dropShadowBlur: 4,
+                dropShadowDistance: 0,
+                align: "center"
+            });
+            badge.resolution = 2;
+            badge.anchor.set(0.5, 1);
+            badge.position.set(width / 2, -Math.round(fontSize * 0.3));
+            ghost.addChild(badge);
+
+            const origDestroy = ghost.destroy.bind(ghost);
+            ghost.destroy = (opts) => origDestroy(opts ?? { children: true });
+
+            return (snappedX, snappedY) => {
+                let dist = 0;
+                let inRange = true;
+                if (necroCenter && maxRange && canvas.scene) {
+                    const targetCenter = { x: snappedX + (width * 0.5), y: snappedY + (height * 0.5) };
+                    const dx = Math.abs(necroCenter.x - targetCenter.x);
+                    const dy = Math.abs(necroCenter.y - targetCenter.y);
+                    dist = Math.round((Math.max(dx, dy) / canvas.grid.size) * (canvas.scene.grid.distance || 5));
+                    inRange = dist <= maxRange;
+                }
+                overlay.visible = !inRange;
+                const countStr = getCountText ? getCountText() : "";
+                const distStr = (necroCenter && maxRange) ? `${dist}ft` : "";
+                if (!inRange) {
+                    badge.text = `OUT OF RANGE (${dist}ft / ${maxRange}ft)`;
+                    badge.style.fill = 0xff4444;
+                } else {
+                    badge.text = [countStr, distStr].filter(Boolean).join(" • ");
+                    badge.style.fill = 0x4ade80;
+                }
+            };
+        };
         $(html).off("click", "button:contains('Perfected'), .conjure-perfected-btn").on("click", "button:contains('Perfected'), .conjure-perfected-btn", async (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -2989,11 +3033,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             ghost.position.set(-1000, -1000);
             canvas.tokens.addChild(ghost);
 
-            const updateGhost = (evt) => {
-                const pos = evt.data.getLocalPosition(canvas.app.stage);
-                const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                ghost.position.set(snapped.x, snapped.y);
-            };
+            const updateHUD = attachGhostHUD(ghost, { necroCenter, maxRange: 60, getCountText: () => "Perfected Thrall" });
+         const updateGhost = (evt) => {
+             const pos = evt.data.getLocalPosition(canvas.app.stage);
+             const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+             ghost.position.set(snapped.x, snapped.y);
+             updateHUD(snapped.x, snapped.y);
+         };
 
             canvas.stage.on("pointermove", updateGhost);
 
@@ -3014,6 +3060,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     return;
                 }
                 if (evt.data.button === 2) {
+                    await actor.update({ "system.resources.focus.value": currentFocus });
                     cleanUp();
                     return;
                 }
@@ -3113,6 +3160,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 const thrallRow = dropdown.closest('.thrall-row');
                 const thrallId = thrallRow.getAttribute('data-token-id');
                 const toggleGroup = thrallRow.querySelector('.spirit-toggle-group');
+
+                if (this.actionStates[thrallId]) {
+                    dropdown.value = this.actionStates[thrallId];
+                }
+                dropdown.addEventListener("change", (e) => {
+                    this.actionStates[thrallId] = e.target.value;
+                });
                 
                 const updateToggle = () => {
                     if (!toggleGroup) return; 
@@ -3180,203 +3234,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
 
 
-        const reanimateBtn = html.querySelector(".reanimate-foe-btn");
-        if (reanimateBtn) {
-            reanimateBtn.addEventListener("click", async (e) => {
-                e.preventDefault();
-                const actor = game.actors.get(this.necroId) || game.user.character;
-                if (!actor || !canvas.scene) return;
-
-                const currentFocus = actor.system?.resources?.focus?.value || 0;
-                if (currentFocus === 0) return ui.notifications.warn("You have no Focus Points to cast Reanimate Foe!");
-
-                const loreSkill = Object.values(actor.skills).find(s => s.slug?.includes("undead-lore") || s.label.toLowerCase().includes("undead lore"));
-                if (!loreSkill) return ui.notifications.warn("You lack the Undead Lore skill required to weave this magic.");
-
-                const targets = Array.from(game.user.targets);
-                if (targets.length !== 1) return ui.notifications.warn("You must target exactly one dead enemy corpse on the canvas.");
-                
-                const corpseDoc = targets[0].document;
-                const corpseActor = targets[0].actor;
-
-                if ((corpseActor.system.attributes.hp?.value || 0) > 0) return ui.notifications.warn("The target is still breathing. It must be dead (0 HP).");
-
-                const necroTokens = actor.getActiveTokens();
-                if (necroTokens.length === 0) return ui.notifications.warn("Necromancer token not found on the canvas.");
-                const necroToken = necroTokens[0];
-
-                const allThralls = canvas.scene.tokens.filter(t => t.flags?.["necromancer-thrall-helper"]?.masterId === actor.id);
-                const validThralls = allThralls.filter(t => {
-                    let distToNecro = 999;
-                    const dx = Math.abs(t.x - necroToken.x);
-                    const dy = Math.abs(t.y - necroToken.y);
-                    distToNecro = (Math.max(dx, dy) / canvas.grid.size) * (canvas.scene.grid.distance || 5);
-                    
-                    let distToCorpse = 999;
-                    const dx2 = Math.abs(t.x - corpseDoc.x);
-                    const dy2 = Math.abs(t.y - corpseDoc.y);
-                    distToCorpse = (Math.max(dx2, dy2) / canvas.grid.size) * (canvas.scene.grid.distance || 5);
-                    
-                    return distToNecro <= 30 && distToCorpse <= 30; 
-                });
-
-                if (validThralls.length === 0) return ui.notifications.warn("No thrall available within 30 feet of you AND 30 feet of the corpse.");
-
-                const corpseLevel = corpseActor.level || 1;
-                const standardDCs = [14, 15, 16, 18, 19, 20, 22, 23, 24, 26, 27, 28, 30, 31, 32, 34, 35, 36, 38, 39, 40, 42, 44, 46, 48, 50];
-                const exactDC = corpseLevel < 0 ? 14 : (corpseLevel > 25 ? 50 : standardDCs[corpseLevel]);
-
-                let optionsHtml = validThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
-
-                new Dialog({
-                    title: "Reanimate Foe",
-                    content: `
-                        <p>Sacrifice a thrall and launch its animus into <b>${corpseDoc.name}</b>?</p>
-                        <p>Rolling <b>Undead Lore</b> against DC ${exactDC} (Level ${corpseLevel}).</p>
-                        <form><div class="form-group"><label>Thrall to Launch:</label><select id="rf-thrall">${optionsHtml}</select></div></form>
-                    `,
-                    buttons: {
-                        cast: {
-                            icon: '<i class="fas fa-bolt"></i>',
-                            label: "Launch",
-                            callback: async (dHtml) => {
-                                const thrallId = dHtml.find("#rf-thrall").val();
-                                const thrallToken = canvas.tokens.get(thrallId);
-                                if (!thrallToken) return;
-
-                                await actor.update({ "system.resources.focus.value": currentFocus - 1 });
-
-                                const roll = await new Roll(`1d20 + ${loreSkill.mod}`).evaluate({async: true});
-                                const total = roll.total;
-                                let dosNum = total >= exactDC + 10 ? 3 : total >= exactDC ? 2 : total <= exactDC - 10 ? 0 : 1;
-                                if (roll.dice[0].results[0].result === 20) dosNum = Math.min(3, dosNum + 1);
-                                if (roll.dice[0].results[0].result === 1) dosNum = Math.max(0, dosNum - 1);
-
-                                const dosMap = ["Critical Failure", "Failure", "Success", "Critical Success"];
-                                const dosColors = ["#ef4444", "#eab308", "#3b82f6", "#22c55e"];
-                                
-                                let chatContent = `
-                                    <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid ${dosColors[dosNum]};">
-                                        <p style="margin: 0 0 5px 0;"><b>${actor.name}</b> violently launches <b>${thrallToken.name}</b> into the corpse of <b>${corpseDoc.name}</b>!</p>
-                                        <p style="margin: 0; font-size: 1.1em;">Undead Lore: <b>${total}</b> vs DC ${exactDC}</p>
-                                        <p style="margin: 0; font-weight: bold; color: ${dosColors[dosNum]};">${dosMap[dosNum]}!</p>
-                                `;
-
-                                await thrallToken.document.delete();
-
-                                if (dosNum === 0) {
-                                    await actor.update({ "system.resources.focus.value": currentFocus });
-                                    chatContent += `<p style="margin: 5px 0 0 0;">The ritual violently rejects the corpse. A basic thrall spawns in its place, and the Focus Point is refunded.</p></div>`;
-                                    
-                                    const presets = typeof getThrallPresets === "function" ? getThrallPresets(actor) : [];
-                                    const presetId = presets.length > 0 ? presets[0].id : "default";
-                                    const basePayload = await prepareThrallPayload(actor, presetId);
-                                    if (basePayload) {
-                                        const finalPayload = foundry.utils.mergeObject(basePayload, {
-                                            x: corpseDoc.x, y: corpseDoc.y, delta: { ownership: { [game.user.id]: 3 } }
-                                        });
-                                        executeSpawn(finalPayload);
-                                    }
-                                } else {
-                                    const decayAmount = dosNum === 1 ? 50 : 15;
-                                    const isFailure = dosNum === 1;
-
-                                    chatContent += `
-                                        <p style="margin: 5px 0 0 0;">The corpse violently jerks back to un-life! It has 100 HP and decays <b>${decayAmount} HP</b> each turn.</p>
-                                        <p style="margin: 5px 0 0 0; font-size: 0.85em; font-style: italic; color: #aaa;">Special abilities and Strike side-effects are disabled by the ritual.</p>
-                                    </div>`;
-
-                                    ui.notifications.info("Click an adjacent space to spawn the Reanimated Foe.");
-                                    document.body.style.cursor = "crosshair";
-                                    canvas.app.view.style.cursor = "crosshair";
-
-                                    const gridSize = canvas.grid.size;
-                                    const ghost = new PIXI.Graphics();
-                                    ghost.beginFill(0x9900ff, 0.4);
-                                    ghost.lineStyle(2, 0x6600cc, 0.8);
-                                    ghost.drawRect(0, 0, (corpseDoc.width || 1) * gridSize, (corpseDoc.height || 1) * gridSize);
-                                    ghost.endFill();
-                                    ghost.zIndex = 1000;
-                                    canvas.tokens.addChild(ghost);
-
-                                    const updateGhost = (evt) => {
-                                        const pos = evt.data.getLocalPosition(canvas.app.stage);
-                                        const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                                        ghost.position.set(snapped.x, snapped.y);
-                                    };
-
-                                    canvas.stage.on("pointermove", updateGhost);
-
-                                    const cleanUp = () => {
-                                        document.body.style.cursor = "";
-                                        canvas.app.view.style.cursor = "";
-                                        canvas.stage.off("pointermove", updateGhost);
-                                        ghost.destroy();
-                                    };
-
-                                    canvas.stage.once("pointerdown", async (evt) => {
-                                        if (evt.data.button !== 0) { cleanUp(); return; }
-                                        const pos = evt.data.getLocalPosition(canvas.app.stage);
-                                        const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                                        cleanUp();
-
-                                        let payload = corpseDoc.toObject();
-                                        payload.actorLink = false; 
-                                        payload.x = snapped.x;
-                                        payload.y = snapped.y;
-                                        payload.name = `Reanimated ${corpseDoc.name}`;
-                                        payload.flags = payload.flags || {};
-                                        payload.flags["necromancer-thrall-helper"] = { masterId: actor.id };
-
-                                        const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
-                                        if (newTokenDoc && newTokenDoc.actor) {
-                                            const newActor = newTokenDoc.actor;
-                                            
-                                            await newActor.update({
-                                                "system.attributes.hp.value": 100,
-                                                "system.attributes.hp.max": 100,
-                                                "system.attributes.hp.temp": 0,
-                                                "system.attributes.immunities": [],
-                                                "system.attributes.weaknesses": [],
-                                                "system.attributes.resistances": [],
-                                                "system.details.alliance": "party"
-                                            });
-
-                                            const effectData = {
-                                                name: "Reanimated Foe",
-                                                type: "effect",
-                                                img: "icons/magic/death/icons/magic/death/skeleton-skull-soul-blue.webp",
-                                                system: {
-                                                    duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                                                    description: { value: `<b>Decay:</b> Loses ${decayAmount} HP at the end of its turn. Cannot be healed.<br>${isFailure ? "<b>Failure:</b> Strikes deal half damage." : ""}` },
-                                                    rules: [{ key: "Immunity", type: "healing" }]
-                                                },
-                                                flags: {
-                                                    "necromancer-thrall-helper": {
-                                                        isReanimatedFoe: true,
-                                                        decayAmount: decayAmount,
-                                                        masterId: actor.id
-                                                    }
-                                                }
-                                            };
-                                            await newActor.createEmbeddedDocuments("Item", [effectData]);
-                                        }
-                                    });
-                                }
-
-                                await ChatMessage.create({
-                                    speaker: ChatMessage.getSpeaker({ actor: actor }),
-                                    flavor: `<strong>Reanimate Foe</strong>`,
-                                    content: chatContent
-                                });
-                            }
-                        },
-                        cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-                    },
-                    default: "cast"
-                }).render(true);
-            });
-        }
+        
         const imgBtn = html.querySelector(".set-default-img-btn");
         if (imgBtn) {
             imgBtn.addEventListener("click", async (e) => {
@@ -3539,10 +3397,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 ghost.position.set(-1000, -1000);
                 canvas.tokens.addChild(ghost);
 
+                const updateHUD = attachGhostHUD(ghost, { necroCenter, maxRange: 60, getCountText: () => `Lancer ${currentSpawnIndex + 1} / ${maxSpawns}` });
                 const updateGhost = (evt) => {
                     const pos = evt.data.getLocalPosition(canvas.app.stage);
                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
                     ghost.position.set(snapped.x, snapped.y);
+                    updateHUD(snapped.x, snapped.y);
                 };
 
                 canvas.stage.on("pointermove", updateGhost);
@@ -3565,6 +3425,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     }
 
                     if (evt.data.button === 2) {
+                        if (currentSpawnIndex === 0) {
+                            await actor.update({ "system.resources.focus.value": currentFocus });
+                        }
                         cleanUp();
                         ui.notifications.info(`Finished summoning ${currentSpawnIndex} Skeletal Lancer(s).`);
                         return;
@@ -3589,7 +3452,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
-                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id, isSkeletalLancer: true } },
                         elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
@@ -3663,10 +3526,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 ghost.position.set(-1000, -1000);
                 canvas.tokens.addChild(ghost);
 
+                const updateHUD = attachGhostHUD(ghost, { necroCenter, maxRange: 60, getCountText: () => "Nightmare" });
                 const updateGhost = (evt) => {
                     const pos = evt.data.getLocalPosition(canvas.app.stage);
                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
                     ghost.position.set(snapped.x, snapped.y);
+                    updateHUD(snapped.x, snapped.y);
                 };
 
                 canvas.stage.on("pointermove", updateGhost);
@@ -3688,6 +3553,10 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         return;
                     }
                     if (evt.data.button === 2) {
+                        if (!isSustain) {
+                            const currentFocus = actor.system?.resources?.focus?.value || 0;
+                            await actor.update({ "system.resources.focus.value": currentFocus + 1 });
+                        }
                         cleanUp();
                         return;
                     }
@@ -3717,7 +3586,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     const finalPayload = foundry.utils.mergeObject(tokenDoc.toObject(), {
                         actorLink: false, 
                         ownership: { [game.user.id]: 3 }, 
-                        flags: { "necromancer-thrall-helper": { masterId: actor.id } },
+                        flags: { "necromancer-thrall-helper": { masterId: actor.id, isRecurringNightmare: true } },
                         elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
@@ -3758,11 +3627,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         if (!html.querySelector(".dismiss-all-btn")) {
             const tempDiv = document.createElement("div");
             tempDiv.innerHTML = `<button type="button" class="dismiss-all-btn" style="margin-top: 15px; width: 100%; padding: 6px;">Dismiss All Thralls</button>`;
-            html.appendChild(tempDiv.firstElementChild);
-        }
+            const dismissBtn = tempDiv.firstElementChild;
+            html.appendChild(dismissBtn);
 
-        const dismissBtn = html.querySelector(".dismiss-all-btn");
-        if (dismissBtn) {
             dismissBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
                 dismissBtn.disabled = true;
@@ -3809,19 +3676,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             });
         }
 
-        const dropdowns = html.querySelectorAll(".action-dropdown");
-        dropdowns.forEach(dropdown => {
-            const row = dropdown.closest(".thrall-row");
-            if (row) {
-                const tokenId = row.dataset.tokenId;
-                if (this.actionStates[tokenId]) {
-                    dropdown.value = this.actionStates[tokenId];
-                }
-                dropdown.addEventListener("change", (e) => {
-                    this.actionStates[tokenId] = e.target.value;
-                });
-            }
-        });
+        
         globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
         const executeSheddingMatrix = async (actor, maxSpawns) => {
             if (globalThis.NecroThrallHelper._isSheddingCorpses) {
@@ -3849,21 +3704,23 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             ghost.zIndex = 1000;
             canvas.tokens.addChild(ghost);
 
-            const updateGhost = (evt) => {
-                const pos = evt.data.getLocalPosition(canvas.app.stage);
-                let gx = pos.x; let gy = pos.y;
-                if (canvas.grid.getSnappedPoint) {
-                    const snapped = canvas.grid.getSnappedPoint(pos, { mode: CONST.GRID_SNAPPING_MODES.TOP_LEFT_VERTEX });
-                    gx = snapped.x; gy = snapped.y;
-                } else if (canvas.grid.getTopLeftPoint) {
-                    const snapped = canvas.grid.getTopLeftPoint(pos);
-                    gx = snapped.x ?? pos.x; gy = snapped.y ?? pos.y;
-                } else if (canvas.grid.getTopLeft) {
-                    const [sx, sy] = canvas.grid.getTopLeft(pos.x, pos.y);
-                    gx = sx; gy = sy;
-                }
-                ghost.position.set(gx, gy);
-            };
+            const updateHUD = attachGhostHUD(ghost, { getCountText: () => `Shed ${currentSpawn + 1} / ${maxSpawns}` });
+         const updateGhost = (evt) => {
+             const pos = evt.data.getLocalPosition(canvas.app.stage);
+             let gx = pos.x; let gy = pos.y;
+             if (canvas.grid.getSnappedPoint) {
+                 const snapped = canvas.grid.getSnappedPoint(pos, { mode: CONST.GRID_SNAPPING_MODES.TOP_LEFT_VERTEX });
+                 gx = snapped.x; gy = snapped.y;
+             } else if (canvas.grid.getTopLeftPoint) {
+                 const snapped = canvas.grid.getTopLeftPoint(pos);
+                 gx = snapped.x ?? pos.x; gy = snapped.y ?? pos.y;
+             } else if (canvas.grid.getTopLeft) {
+                 const [sx, sy] = canvas.grid.getTopLeft(pos.x, pos.y);
+                 gx = sx; gy = sy;
+             }
+             ghost.position.set(gx, gy);
+             updateHUD(gx, gy);
+         };
             canvas.stage.on("pointermove", updateGhost);
 
             const cleanUpSpawns = () => {
@@ -4003,11 +3860,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     ghost.zIndex = 1000;
                     canvas.tokens.addChild(ghost);
     
-                    const updateGhost = (evt) => {
-                        const pos = evt.data.getLocalPosition(canvas.app.stage);
-                        const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
-                        ghost.position.set(snapped.x, snapped.y);
-                    };
+                    const updateHUD = attachGhostHUD(ghost, { width: gridSize * 4, height: gridSize * 4, necroCenter, maxRange: 120, getCountText: () => "Living Graveyard" });
+                 const updateGhost = (evt) => {
+                     const pos = evt.data.getLocalPosition(canvas.app.stage);
+                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
+                     ghost.position.set(snapped.x, snapped.y);
+                     updateHUD(snapped.x, snapped.y);
+                 };
     
                     canvas.stage.on("pointermove", updateGhost);
     
@@ -4227,10 +4086,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 ghost.position.set(-1000, -1000);
                                 canvas.tokens.addChild(ghost);
 
+                                const updateHUD = attachGhostHUD(ghost, { getCountText: () => `Army ${currentSpawnIndex + 1} / ${maxSpawns}` });
                                 const updateGhost = (evt) => {
                                     const pos = evt.data.getLocalPosition(canvas.app.stage);
                                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
                                     ghost.position.set(snapped.x, snapped.y);
+                                    updateHUD(snapped.x, snapped.y);
                                 };
 
                                 canvas.stage.on("pointermove", updateGhost);
@@ -4381,6 +4242,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         return;
                     }
                     if (evt.data.button === 2) {
+                        await actor.update({ "system.resources.focus.value": currentFocus });
                         ui.notifications.info("Swarm placement cancelled.");
                         cleanUp();
                         return;
@@ -4725,15 +4587,18 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             });
         }
 
-        html.addEventListener("pointerup", () => {
-            if (!this.position) return;
-            localStorage.setItem(`necro-deck-bounds-${game.user.id}`, JSON.stringify({
-                left: this.position.left,
-                top: this.position.top,
-                width: this.position.width,
-                height: this.position.height
-            }));
-        });
+        if (!this._boundsListenerBound) {
+            this._boundsListenerBound = true;
+            html.addEventListener("pointerup", () => {
+                if (!this.position) return;
+                localStorage.setItem(`necro-deck-bounds-${game.user.id}`, JSON.stringify({
+                    left: this.position.left,
+                    top: this.position.top,
+                    width: this.position.width,
+                    height: this.position.height
+                }));
+            });
+        }
         
         const editPortfolioBtn = html.querySelector(".edit-portfolio-btn");
         if (editPortfolioBtn) {
@@ -5074,6 +4939,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 });
             });
         }
+
+        const focusPips = html.querySelectorAll(".focus-pip");
+        focusPips.forEach(pip => {
+            pip.addEventListener("click", async (e) => {
+                e.preventDefault();
+                const actor = game.actors.get(this.necroId) || game.user.character;
+                if (!actor) return;
+                const clickedIndex = parseInt(e.currentTarget.dataset.index, 10);
+                const currentFP = actor.system?.resources?.focus?.value || 0;
+                const newFP = (clickedIndex === currentFP) ? currentFP - 1 : clickedIndex;
+                await actor.update({ "system.resources.focus.value": Math.max(0, newFP) });
+            });
+        });
 
         const mapPips = html.querySelectorAll(".map-pip");
         mapPips.forEach(pip => {
@@ -5862,75 +5740,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         }).render(true);
                         break;
                     }
-                    case "Desperate Revival": {
-                        let totalSiphonedDamage = 0;
-                        const casterId = message.speaker?.actor;
-                        const casterActor = game.actors.get(casterId) || canvas.tokens.controlled[0]?.actor;
-                        const dbUpdates = {};
-            
-                        for (const [tokenId, targetData] of Object.entries(targets)) {
-                            if (targetData.hasApplied && !targetData._desperateRevivalProcessed) {
-                                dbUpdates[`flags.aoe-easy-resolve.targets.${tokenId}._desperateRevivalProcessed`] = true;
-            
-                                const targetToken = canvas.tokens.get(tokenId);
-                                if (!targetToken?.actor || targetData.isImmune) continue;
-            
-                                const dos = targetData.degreeOfSuccess;
-                                if (!dos || dos === "criticalSuccess") continue;
-            
-                                const targetLevel = targetToken.actor.level || 1;
-                                let damageAmount = 0;
-            
-                                if (dos === "success") damageAmount = Math.max(1, Math.floor(targetLevel / 2));
-                                else if (dos === "failure") damageAmount = Math.max(1, targetLevel);
-                                else if (dos === "criticalFailure") damageAmount = Math.max(2, targetLevel * 2);
-            
-                                const chosenType = message.getFlag("necromancer-thrall-helper", `dmgType_${tokenId}`) || "void";
-                                const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll");
-            
-                                if (DamageRoll && damageAmount > 0) {
-                                    const roll = await new DamageRoll(`${damageAmount}[${chosenType}]`).evaluate({async: true});
-                                    
-                                    await targetToken.actor.applyDamage({ damage: roll, token: targetToken.document });
-                                    totalSiphonedDamage += damageAmount;
-                                }
-                            }
-                        }
-                        
-                        if (Object.keys(dbUpdates).length > 0) {
-                            await message.update(dbUpdates);
-                        }
-            
-                        if (casterActor && totalSiphonedDamage > 0) {
-                            const currentHP = casterActor.system.attributes.hp.value;
-                            const maxHP = casterActor.system.attributes.hp.max;
-                            const halfMaxHP = Math.floor(maxHP / 2);
-                            const actualHealed = Math.min(halfMaxHP, totalSiphonedDamage, maxHP - currentHP);
-            
-                            if (actualHealed > 0) {
-                                await casterActor.update({ "system.attributes.hp.value": currentHP + actualHealed });
-            
-                                const necroToken = casterActor.getActiveTokens()[0];
-                                if (necroToken && canvas.ready) {
-                                    canvas.interface.createScrollingText(necroToken.center, `+${actualHealed} HP`, {
-                                        anchor: CONST.TEXT_ANCHOR_POINTS.TOP, fill: 0x4ade80, direction: CONST.TEXT_ANCHOR_POINTS.UP
-                                    });
-                                }
-            
-                                await ChatMessage.create({
-                                    speaker: ChatMessage.getSpeaker({ actor: casterActor }),
-                                    flavor: `<strong>Desperate Revival: Siphon Harvest</strong>`,
-                                    content: `
-                                        <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #4ade80;">
-                                            <p style="margin: 0 0 4px 0;"><b>${casterActor.name}</b> siphons <b>${totalSiphonedDamage} total damage</b> from the surrounding life force!</p>
-                                            <p style="margin: 0; font-weight: bold; color: #4ade80;">Regained ${actualHealed} Hit Points (Cap: ${halfMaxHP} HP).</p>
-                                        </div>
-                                    `
-                                });
-                            }
-                        }
-                        break;
-                    }
+                    
                     case "amalgamate": {
                         const necroTokens = actor.getActiveTokens();
                         if (necroTokens.length === 0) {
@@ -8336,18 +8146,21 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 ghost.position.set(-1000, -1000);
                                 canvas.tokens.addChild(ghost);
 
-                                const updateGhost = (event) => {
-                                    const position = event.data.getLocalPosition(canvas.app.stage);
-                                    let spawnX = position.x;
-                                    let spawnY = position.y;
-                                    
-                                    if (canvas.grid.getTopLeftPoint) {
-                                        const snapped = canvas.grid.getTopLeftPoint(position);
-                                        spawnX = snapped.x; 
-                                        spawnY = snapped.y;
-                                    }
-                                    ghost.position.set(spawnX, spawnY);
-                                };
+                                const masterCenter = necroTokens.length > 0 ? necroTokens[0].center : null;
+                             const updateHUD = attachGhostHUD(ghost, { necroCenter: masterCenter, maxRange: 30, getCountText: () => `Thrall ${currentSpawnIndex + 1} / ${count}` });
+                             const updateGhost = (event) => {
+                                 const position = event.data.getLocalPosition(canvas.app.stage);
+                                 let spawnX = position.x;
+                                 let spawnY = position.y;
+
+                                 if (canvas.grid.getTopLeftPoint) {
+                                     const snapped = canvas.grid.getTopLeftPoint(position);
+                                     spawnX = snapped.x; 
+                                     spawnY = snapped.y;
+                                 }
+                                 ghost.position.set(spawnX, spawnY);
+                                 updateHUD(spawnX, spawnY);
+                             };
 
                                 canvas.stage.on("pointermove", updateGhost);
 
@@ -8479,17 +8292,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 ghost.position.set(-1000, -1000);
                 canvas.tokens.addChild(ghost);
 
-                const updateGhost = (event) => {
-                    const position = event.data.getLocalPosition(canvas.app.stage);
-                    let spawnX = position.x;
-                    let spawnY = position.y;
-                    if (canvas.grid.getTopLeftPoint) {
-                        const snapped = canvas.grid.getTopLeftPoint(position);
-                        spawnX = snapped.x; 
-                        spawnY = snapped.y;
-                    }
-                    ghost.position.set(spawnX, spawnY);
-                };
+                const updateHUD = attachGhostHUD(ghost, { width: gridSize * 3, height: gridSize * 3, necroCenter, maxRange: 30, getCountText: () => "Conglomerate" });
+             const updateGhost = (event) => {
+                 const position = event.data.getLocalPosition(canvas.app.stage);
+                 let spawnX = position.x;
+                 let spawnY = position.y;
+                 if (canvas.grid.getTopLeftPoint) {
+                     const snapped = canvas.grid.getTopLeftPoint(position);
+                     spawnX = snapped.x; 
+                     spawnY = snapped.y;
+                 }
+                 ghost.position.set(spawnX, spawnY);
+                 updateHUD(spawnX, spawnY);
+             };
 
                 canvas.stage.on("pointermove", updateGhost);
 
@@ -8510,6 +8325,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         return;
                     }
                     if (event.data.button === 2) {
+                        await actor.update({ "system.resources.focus.value": currentFocus });
                         ui.notifications.info("Conjuration cancelled.");
                         cleanUp();
                         return;
@@ -8550,7 +8366,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             system: { attributes: { hp: { value: totalHP, max: totalHP } } }
                         }
                     });
-                    applyCustomVisuals(finalPayload, actor, "tendril");
+                    applyCustomVisuals(finalPayload, actor, "conglom");
 
                     executeSpawn(finalPayload).then(() => {
                         ChatMessage.create({
@@ -8657,17 +8473,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 ghost.position.set(-1000, -1000);
                 canvas.tokens.addChild(ghost);
 
-                const updateGhost = (event) => {
-                    const position = event.data.getLocalPosition(canvas.app.stage);
-                    let spawnX = position.x;
-                    let spawnY = position.y;
-                    if (canvas.grid.getTopLeftPoint) {
-                        const snapped = canvas.grid.getTopLeftPoint(position);
-                        spawnX = snapped.x; 
-                        spawnY = snapped.y;
-                    }
-                    ghost.position.set(spawnX, spawnY);
-                };
+                const updateHUD = attachGhostHUD(ghost, { necroCenter, maxRange: 30, getCountText: () => `Tendril ${currentSpawnIndex + 1} / ${count}` });
+             const updateGhost = (event) => {
+                 const position = event.data.getLocalPosition(canvas.app.stage);
+                 let spawnX = position.x;
+                 let spawnY = position.y;
+                 if (canvas.grid.getTopLeftPoint) {
+                     const snapped = canvas.grid.getTopLeftPoint(position);
+                     spawnX = snapped.x; 
+                     spawnY = snapped.y;
+                 }
+                 ghost.position.set(spawnX, spawnY);
+                 updateHUD(spawnX, spawnY);
+             };
                 canvas.stage.on("pointermove", updateGhost);
                 const cleanUp = () => {
                     document.body.style.cursor = "";
@@ -8685,6 +8503,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         return;
                     }
                     if (event.data.button === 2) {
+                        if (currentSpawnIndex === 0) {
+                            await actor.update({ "system.resources.focus.value": currentFocus });
+                        }
                         ui.notifications.info("Conjuration cancelled.");
                         cleanUp();
                         return;
@@ -8719,7 +8540,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
                         delta: { ownership: { [game.user.id]: 3 } }
                     });
-                    applyCustomVisuals(finalPayload, actor, "conglom");
+                    applyCustomVisuals(finalPayload, actor, "tendril");
 
                     currentSpawnIndex++;
                     executeSpawn(finalPayload).catch(err => console.error(err));
@@ -8801,6 +8622,21 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 if (tokenDoc) {
                     await executeDelete(tokenDoc.id);
                     ui.notifications.info(`Dismissed ${tokenDoc.name}.`);
+                }
+            });
+        });
+
+        const thrallTops = html.querySelectorAll(".thrall-top");
+        thrallTops.forEach(top => {
+            top.addEventListener("click", (e) => {
+                e.preventDefault();
+                const row = e.currentTarget.closest(".thrall-row");
+                const tokenId = row?.dataset?.tokenId;
+                if (!tokenId || !canvas.scene) return;
+                const token = canvas.tokens.get(tokenId);
+                if (token) {
+                    token.control({ releaseOthers: !e.shiftKey });
+                    canvas.animatePan({ x: token.center.x, y: token.center.y, duration: 250 });
                 }
             });
         });

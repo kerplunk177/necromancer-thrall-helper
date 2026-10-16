@@ -1,4 +1,12 @@
 <div class="portfolio-wrapper">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 6px;">
+        <span style="font-weight: bold; color: #ccc; font-size: 0.9rem;"><i class="fas fa-users"></i> Saved Identities</span>
+        <div style="display: flex; gap: 6px;">
+            <button type="button" id="export-portfolio-btn" class="sub-btn" title="Export Portfolio to JSON"><i class="fas fa-file-export"></i> Export</button>
+            <button type="button" id="import-portfolio-btn" class="sub-btn" title="Import Portfolio from JSON"><i class="fas fa-file-import"></i> Import</button>
+        </div>
+    </div>
+
     <section class="portfolio-list">
         {{#if presets.length}}
             {{#each presets}}

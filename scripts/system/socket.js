@@ -22,8 +22,8 @@ async function requestSpawn(payload) {
     const necro = masterId ? game.actors.get(masterId) : null;
     const necroName = necro ? necro.name : "A Necromancer";
 
-    let confirm = true;
     const autoApprove = game.settings.get("necromancer-thrall-helper", "autoApproveSpawns");
+    let confirm = !!autoApprove;
 
     if (!autoApprove) {
         try {
@@ -32,10 +32,12 @@ async function requestSpawn(payload) {
                 content: `<p><b>${necroName}</b> is attempting to summon a Thrall at this highlighted location. Allow?</p>`,
                 yes: () => true,
                 no: () => false,
-                defaultYes: true
+                defaultYes: true,
+                rejectClose: false
             });
         } catch (e) {
             console.error("Necromancer Helper | Dialog confirmation failed:", e);
+            confirm = false;
         }
     }
 
@@ -162,14 +164,3 @@ export async function executeHazard(regionData, drawingData) {
     }
 }
 
-export async function executeDamage(tokenId, rollJSON) {
-    if (game.user.isGM) {
-        return await applyDamageAsGM(tokenId, rollJSON);
-    } else {
-        if (!socketlibSocket) {
-            ui.notifications.error("Socketlib connection not established.");
-            return;
-        }
-        return await socketlibSocket.executeAsGM("applyDamageAsGM", tokenId, rollJSON);
-    }
-}

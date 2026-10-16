@@ -23,6 +23,13 @@
         .header-info h2 { border: none; margin: 0; padding: 0; font-size: 1.6em; color: #fff; letter-spacing: 0.5px; line-height: 1; }
         .header-info .subtext { font-size: 0.95em; color: #aaa; }
         
+       .header-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+        .focus-tracker { display: flex; align-items: center; gap: 5px; font-size: 1em; font-weight: bold; }
+        .focus-tracker .focus-label { color: #a855f7; font-weight: bold; margin-right: 2px; font-size: 0.9em; }
+        .focus-pip { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #7e22ce; background: rgba(0,0,0,0.6); cursor: pointer; padding: 0; transition: all 0.15s ease; }
+        .focus-pip.filled { background: #a855f7; border-color: #d8b4fe; box-shadow: 0 0 6px rgba(168, 85, 247, 0.8); }
+        .focus-pip:hover { transform: scale(1.15); border-color: #fff; }
+
         .map-tracker { display: flex; align-items: center; gap: 6px; font-size: 1em; font-weight: bold; }
         .map-tracker .map-label { color: #888; font-weight: normal; margin-right: 4px; }
         .map-pip { background: rgba(0,0,0,0.5); border: 1px solid #555; color: #777; padding: 4px 10px; cursor: pointer; border-radius: 4px; font-size: 0.95em; }
@@ -97,18 +104,24 @@
         .thrall-row { background: rgba(0, 0, 0, 0.6); border: 1px solid #333; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); transition: all 0.15s ease; }
         .thrall-row.canvas-hover { box-shadow: 0 0 12px 2px rgba(239, 68, 68, 0.8) !important; border-color: #ef4444 !important; background: rgba(239, 68, 68, 0.15) !important; }
 
-        .thrall-top { display: flex; gap: 12px; align-items: center; }
+      .thrall-top { display: flex; gap: 12px; align-items: center; cursor: pointer; padding: 2px; border-radius: 4px; transition: background 0.15s ease; }
+        .thrall-top:hover { background: rgba(255, 255, 255, 0.06); }
         .thrall-portrait { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; border: 1px solid #111; background: #000; box-shadow: 0 0 4px rgba(0,0,0,0.8); }
         .thrall-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
         .thrall-name { font-weight: bold; color: #fff; font-size: 1.15em; line-height: 1; }
-        .proximity-tracker { display: flex; gap: 4px; font-size: 0.85em; font-weight: bold; }
+        .proximity-tracker { display: flex; gap: 4px; font-size: 0.85em; font-weight: bold; flex-wrap: wrap; }
         .prox-badge { padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.6); border: 1px solid; display: flex; align-items: center; gap: 4px; }
         .prox-badge.enemy { color: #ef4444; border-color: #7f1d1d; }
         .prox-badge.friendly { color: #3b82f6; border-color: #1e3a8a; }
+        .prox-badge.dist.in-range { color: #4ade80; border-color: #14532d; }
+        .prox-badge.dist.out-mid { color: #facc15; border-color: #713f12; }
+        .prox-badge.dist.out-far { color: #f87171; border-color: #7f1d1d; }
 
         /* Action Stack */
         .thrall-actions-stack { display: flex; flex-direction: column; gap: 6px; }
         .thrall-actions-stack select { height: 32px; margin: 0; padding: 0 6px; background: rgba(0,0,0,0.8); color: #fff; border: 1px solid #555; border-radius: 4px; font-size: 1.05em; width: 100%; cursor: pointer; }
+        .thrall-actions-stack select optgroup { background: #111; color: #a855f7; font-weight: bold; }
+        .thrall-actions-stack select option { background: #1a1c23; color: #eee; font-weight: normal; }
         .thrall-btn-row { display: flex; gap: 6px; }
         .thrall-btn-row button { flex: 1; height: 32px; margin: 0 !important; padding: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; border: 1px solid; color: #fff; font-size: 1em; font-weight: bold; gap: 6px; }
         .thrall-btn-row .execute-btn { background: #166534; border-color: #14532d; }
@@ -123,11 +136,22 @@
             <span class="subtext">Lvl {{actorLevel}} &nbsp;|&nbsp; Thrall DMG: {{thrallDamage}}</span>
         </div>
         
-        <div class="map-tracker">
-            <span class="map-label">MAP:</span>
-            <button type="button" class="map-pip {{map0Active}}" data-value="0">0</button>
-            <button type="button" class="map-pip {{map5Active}}" data-value="-5">-5</button>
-            <button type="button" class="map-pip {{map10Active}}" data-value="-10">-10</button>
+        <div class="header-controls">
+            {{#if maxFocus}}
+            <div class="focus-tracker" title="Click pips to spend or restore Focus Points">
+                <span class="focus-label">FP:</span>
+                {{#each focusPips}}
+                <button type="button" class="focus-pip {{#if this.filled}}filled{{/if}}" data-index="{{this.index}}" title="{{#if this.filled}}Spend Focus Point{{else}}Restore Focus Point{{/if}}"></button>
+                {{/each}}
+            </div>
+            {{/if}}
+
+            <div class="map-tracker">
+                <span class="map-label">MAP:</span>
+                <button type="button" class="map-pip {{map0Active}}" data-value="0">0</button>
+                <button type="button" class="map-pip {{map5Active}}" data-value="-5">-5</button>
+                <button type="button" class="map-pip {{map10Active}}" data-value="-10">-10</button>
+            </div>
         </div>
     </header>
 
@@ -183,13 +207,16 @@
         {{#if activeThralls.length}}
             {{#each activeThralls}}
                 <div class="thrall-row" data-token-id="{{this.id}}">
-                    <div class="thrall-top">
+                    <div class="thrall-top" title="Click to select and pan to {{this.name}} (Shift+Click to multi-select)">
                         <img src="{{this.img}}" alt="{{this.name}}" class="thrall-portrait">
                         <div class="thrall-info">
                             <span class="thrall-name">{{this.name}}</span>
                             <div class="proximity-tracker">
                                 <span class="prox-badge enemy" title="Enemies within 10ft"><i class="fas fa-biohazard"></i> {{this.nearbyEnemies}}</span>
                                 <span class="prox-badge friendly" title="Allies within 10ft"><i class="fas fa-shield-alt"></i> {{this.nearbyFriendlies}}</span>
+                                {{#if this.hasMasterDist}}
+                                <span class="prox-badge dist {{this.distClass}}" title="Distance from {{../actorName}}"><i class="fas fa-ruler-combined"></i> {{this.distToMaster}}ft</span>
+                                {{/if}}
                             </div>
                         </div>
                     </div>
@@ -197,31 +224,39 @@
                     <!-- Action Stack -->
                     <div class="thrall-actions-stack">
                         <select class="action-dropdown" name="action">
-                            <option value="strike">Strike</option>
-                            {{#if this.isConglomerate}}
-                                <option value="conglomerate-charge">Conglomerate Charge</option>
-                            {{else}}
-                                <option value="charge">Charge</option>
-                            {{/if}}
-                            {{#if ../hasBlossomingGore}}<option value="blossoming-gore">Blossoming Gore</option>{{/if}}
-                            {{#if ../hasAmalgamate}}<option value="amalgamate">Amalgamate</option>{{/if}}
-                            {{#if ../hasNecroticBomb}}<option value="explode">Necrotic Bomb</option>{{/if}}
-                            {{#if ../hasZombieHorde}}<option value="zombie-horde">Zombie Horde</option>{{/if}}
-                            {{#if ../hasBindHeroicSpirit}}<option value="bind-heroic-spirit">Bind Heroic Spirit</option>{{/if}}
-                            {{#if ../hasFleshTsunami}}<option value="flesh-tsunami">Flesh Tsunami</option>{{/if}}
-                            {{#if ../hasReanimateFoe}}<option value="reanimate-foe">Reanimate Foe</option>{{/if}}
-                            {{#if ../hasCalcification}}<option value="calcification">Calcification</option>{{/if}}
-                            {{#if ../hasTemporaryPossession}}<option value="temporary-possession">Temporary Possession</option>{{/if}}
-                            {{#if ../hasDeathlyScream}}<option value="deathly-scream">Deathly Scream</option>{{/if}}
-                            {{#if ../hasLifeTap}}<option value="life-tap">Life Tap</option>{{/if}}
-                            {{#if ../hasMuscleBarrier}}<option value="muscle-barrier">Muscle Barrier</option>{{/if}}
-                            {{#if ../hasSongOfTheSoul}}<option value="song-of-the-soul">Song of the Soul</option>{{/if}}
-                            {{#if ../hasBonyBarrage}}<option value="bony-barrage">Bony Barrage</option>{{/if}}
-                            {{#if ../hasBoneBurst}}<option value="bone-burst">Bone Burst</option>{{/if}}
-                            {{#if ../hasDeadWeight}}<option value="dead-weight">Dead Weight</option>{{/if}}
-                            {{#if ../hasPuppeteer}}<option value="consume-thrall" {{#if ../consumeDisabled}}disabled{{/if}}>{{../consumeText}}</option>{{/if}}
-                            {{#if ../hasBoneSpear}}<option value="bone-spear">Bone Spear</option>{{/if}}
-                            {{#if ../hasBloodInfusion}}<option value="blood-infusion">Blood Infusion</option>{{/if}}
+                            <optgroup label="Basic Commands">
+                                <option value="strike">Strike</option>
+                                {{#if this.isConglomerate}}
+                                    <option value="conglomerate-charge">Conglomerate Charge</option>
+                                {{else}}
+                                    <option value="charge">Charge</option>
+                                {{/if}}
+                            </optgroup>
+
+                            <optgroup label="Grave Spells (1 FP)">
+                                {{#if ../hasNecroticBomb}}<option value="explode">Necrotic Bomb</option>{{/if}}
+                                {{#if ../hasBonyBarrage}}<option value="bony-barrage">Bony Barrage{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasBoneSpear}}<option value="bone-spear">Bone Spear</option>{{/if}}
+                                {{#if ../hasBlossomingGore}}<option value="blossoming-gore">Blossoming Gore{{#unless this.within60ft}} [>60ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasFleshTsunami}}<option value="flesh-tsunami">Flesh Tsunami{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasZombieHorde}}<option value="zombie-horde">Zombie Horde{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasCalcification}}<option value="calcification">Calcification{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasTemporaryPossession}}<option value="temporary-possession">Temporary Possession{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasDeathlyScream}}<option value="deathly-scream">Deathly Scream{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasLifeTap}}<option value="life-tap">Life Tap</option>{{/if}}
+                                {{#if ../hasBloodInfusion}}<option value="blood-infusion">Blood Infusion</option>{{/if}}
+                                {{#if ../hasDeadWeight}}<option value="dead-weight">Dead Weight</option>{{/if}}
+                                {{#if ../hasMuscleBarrier}}<option value="muscle-barrier">Muscle Barrier{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasSongOfTheSoul}}<option value="song-of-the-soul">Song of the Soul{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasBindHeroicSpirit}}<option value="bind-heroic-spirit">Bind Heroic Spirit{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasReanimateFoe}}<option value="reanimate-foe">Reanimate Foe{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                            </optgroup>
+
+                            <optgroup label="Sacrifice & Utility">
+                                {{#if ../hasBoneBurst}}<option value="bone-burst">Bone Burst{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasAmalgamate}}<option value="amalgamate">Amalgamate{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                                {{#if ../hasPuppeteer}}<option value="consume-thrall" {{#if ../consumeDisabled}}disabled{{/if}}>{{../consumeText}}{{#unless this.within30ft}} [>30ft]{{/unless}}</option>{{/if}}
+                            </optgroup>
                         </select>
                         
                         <div class="spirit-toggle-group" style="display: none; justify-content: center; gap: 6px; margin-top: 6px;">

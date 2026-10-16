@@ -39,11 +39,51 @@ export class PortfolioEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         super._onRender(context, options);
         const html = this.element;
 
-        const standardAdjectives = [
-            "Angry", "Soggy", "Vengeful", "Festering", "Hollow", 
-            "Shivering", "Wrinkled", "Spiteful", "Damp", "Putrid", 
-            "Screaming", "Moth-Eaten", "Bitter", "Rancid", "Haunted"
-        ];
+        const standardAdjectives = Array.from(html.querySelectorAll("input[name='adjective']")).map(cb => cb.value);
+
+        const exportBtn = html.querySelector("#export-portfolio-btn");
+        if (exportBtn) {
+            exportBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const customFamily = this.actor.getFlag("necromancer-thrall-helper", "familyTree") || [];
+                if (customFamily.length === 0) {
+                    return ui.notifications.warn("Your portfolio is empty. Nothing to export!");
+                }
+                const safeName = (this.actor.name || "necromancer").replace(/[^a-z0-9]/gi, "_").toLowerCase();
+                saveDataToFile(JSON.stringify(customFamily, null, 2), "application/json", `${safeName}_thrall_portfolio.json`);
+                ui.notifications.info("Thrall Portfolio exported.");
+            });
+        }
+
+        const importBtn = html.querySelector("#import-portfolio-btn");
+        if (importBtn) {
+            importBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = ".json";
+                input.addEventListener("change", async (ev) => {
+                    const file = ev.target.files?.[0];
+                    if (!file) return;
+                    try {
+                        const text = await readTextFromFile(file);
+                        const imported = JSON.parse(text);
+                        if (!Array.isArray(imported)) throw new Error("Root JSON must be an array.");
+                        const valid = imported.filter(p => p && typeof p.id === "string" && typeof p.name === "string");
+                        if (valid.length === 0) throw new Error("No valid thrall presets found in file.");
+
+                        await this.actor.setFlag("necromancer-thrall-helper", "familyTree", valid);
+                        ui.notifications.info(`Imported ${valid.length} thrall preset(s) into ${this.actor.name}'s portfolio!`);
+                        this.resetForm(html);
+                        this.render(true);
+                    } catch (err) {
+                        console.error("Necromancer Helper | Portfolio Import Error:", err);
+                        ui.notifications.error("Failed to import portfolio: Invalid JSON file.");
+                    }
+                });
+                input.click();
+            });
+        }
 
         const deleteBtns = html.querySelectorAll(".delete-preset-btn");
         deleteBtns.forEach(btn => {
