@@ -1,4 +1,4 @@
-<div class="portfolio-wrapper">
+<div class="portfolio-wrapper" style="max-height: 78vh; overflow-y: auto; padding-right: 6px;">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 6px;">
         <span style="font-weight: bold; color: #ccc; font-size: 0.9rem;"><i class="fas fa-users"></i> Saved Identities</span>
         <div style="display: flex; gap: 6px;">
@@ -7,7 +7,7 @@
         </div>
     </div>
 
-    <section class="portfolio-list">
+    <section class="portfolio-list" style="max-height: 185px; overflow-y: auto; padding-right: 4px; flex-shrink: 0;">
         {{#if presets.length}}
             {{#each presets}}
                 <div class="portfolio-row" data-id="{{this.id}}">

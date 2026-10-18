@@ -2172,7 +2172,7 @@ Hooks.on("createToken", async (tokenDoc, options, userId) => {
     const hasTeamwork = masterActor.items.some(i => i.name === "Thrall Teamwork");
     if (hasTeamwork) {
         const currentCombat = game.combat;
-        const currentRound = currentCombat ? currentCombat.round : "out-of-combat";
+        const currentRound = currentCombat ? `${currentCombat.id}-${currentCombat.round}` : "out-of-combat";
         const lastUsed = masterActor.getFlag("necromancer-thrall-helper", "teamworkRound");
 
         if (lastUsed !== currentRound) {
@@ -3484,7 +3484,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 if (!actor) return;
 
                 const currentCombat = game.combat;
-                const currentRound = currentCombat ? currentCombat.round : `ooc_${Date.now()}`;
+                const currentRound = currentCombat ? `${currentCombat.id}-${currentCombat.round}` : "out-of-combat";
 
                 if (isSustain) {
                     const lastSustained = actor.getFlag("necromancer-thrall-helper", "nightmareSustainRound");
@@ -3592,7 +3592,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     });
                     applyCustomVisuals(finalPayload, actor, "nightmare");
 
-                    const [createdToken] = await executeSpawn(finalPayload);
+                    const spawned = await executeSpawn(finalPayload);
+                    const createdTokenId = spawned?.[0]?.id || spawned?.[0]?._id;
 
                     if (isSustain && currentCombat) {
                         await actor.setFlag("necromancer-thrall-helper", "nightmareSustainRound", currentRound);
@@ -3601,7 +3602,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
                     let attempts = 0;
                     const triggerHaunt = async () => {
-                        const liveTokenDoc = canvas.scene.tokens.get(createdToken.id);
+                        const liveTokenDoc = canvas.scene?.tokens?.get(createdTokenId);
                         if (liveTokenDoc) {
                             globalThis.NecroThrallHelper?.checkNightmareHaunt(liveTokenDoc);
                         } else if (attempts < 20) {
@@ -3637,15 +3638,17 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 const actor = game.actors.get(this.necroId) || game.user.character;
 
                 try {
-                    for (const combat of game.combats) {
-                        const badIds = combat.combatants.filter(c => {
-                            if (!c.actor || !c.token || !canvas.scene.tokens.get(c.tokenId)) return true;
-                            if (actor && c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
-                            return false;
-                        }).map(c => c.id);
+                    if (game.user.isGM) {
+                        for (const combat of game.combats) {
+                            const badIds = combat.combatants.filter(c => {
+                                if (!c.actor || !c.token || !canvas.scene?.tokens.get(c.tokenId)) return true;
+                                if (actor && c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
+                                return false;
+                            }).map(c => c.id);
 
-                        if (badIds.length > 0) {
-                            await combat.deleteEmbeddedDocuments("Combatant", badIds);
+                            if (badIds.length > 0) {
+                                await combat.deleteEmbeddedDocuments("Combatant", badIds);
+                            }
                         }
                     }
 
@@ -3654,8 +3657,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             t.getFlag("necromancer-thrall-helper", "masterId") === actor.id
                         ).map(t => t.id);
 
-                        if (thrallIds.length > 0) {
-                            await canvas.scene.deleteEmbeddedDocuments("Token", thrallIds);
+                        for (const id of thrallIds) {
+                            await executeDelete(id);
                         }
                     }
                 } finally {
@@ -3917,7 +3920,14 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         payload.flags = { "necromancer-thrall-helper": { masterId: actor.id, isLivingGraveyard: true } };
                         payload = applyCustomVisuals(payload, actor, "graveyard");
                         
-                        const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
+                        const spawned = await executeSpawn(payload);
+                        const spawnedId = spawned?.[0]?.id || spawned?.[0]?._id;
+                        let newTokenDoc = null;
+                        for (let i = 0; i < 20; i++) {
+                            newTokenDoc = canvas.scene?.tokens?.get(spawnedId);
+                            if (newTokenDoc?.actor) break;
+                            await new Promise(r => setTimeout(r, 100));
+                        }
                         
                         if (newTokenDoc && newTokenDoc.actor) {
                             const effectData = {
@@ -4359,15 +4369,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             dismissStormBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
                 if (!canvas.scene) return;
-                const storms = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "stormRegionId"));
-                for (const s of storms) {
-                    const sId = s.getFlag("necromancer-thrall-helper", "stormRegionId");
-                    const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "stormRegionId") === sId);
-                    if (drawing) await drawing.delete();
-                    await s.delete();
+                const rIds = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "stormRegionId")).map(r => r.id);
+                const dIds = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "stormRegionId")).map(d => d.id);
+                if (rIds.length || dIds.length) {
+                    globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { regionIds: rIds, drawingIds: dIds });
                 }
                 ui.notifications.info("Dread Mosquito Storm dismissed.");
-                this.render({ force: false });
+                setTimeout(() => this.render({ force: false }), 150);
             });
         }
         const hallowedBtn = html.querySelector(".hallowed-btn");
@@ -4575,15 +4583,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             dismissGoreBtn.addEventListener("click", async (e) => {
                 e.preventDefault();
                 if (!canvas.scene) return;
-                const gores = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "goreRegionId"));
-                for (const g of gores) {
-                    const gId = g.getFlag("necromancer-thrall-helper", "goreRegionId");
-                    const drawing = canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "goreRegionId") === gId);
-                    if (drawing) await drawing.delete();
-                    await g.delete();
+                const rIds = canvas.scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "goreRegionId")).map(r => r.id);
+                const dIds = canvas.scene.drawings.filter(d => d.getFlag("necromancer-thrall-helper", "goreRegionId")).map(d => d.id);
+                if (rIds.length || dIds.length) {
+                    globalThis.NecroThrallHelper.purgeGraphics(canvas.scene.id, { regionIds: rIds, drawingIds: dIds });
                 }
                 ui.notifications.info("Blossoming Gore dismissed.");
-                this.render({ force: false });
+                setTimeout(() => this.render({ force: false }), 150);
             });
         }
 
@@ -5301,7 +5307,14 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                                     isReanimatedFoe: true 
                                                 };
 
-                                                const [newTokenDoc] = await canvas.scene.createEmbeddedDocuments("Token", [payload]);
+                                                const spawned = await executeSpawn(payload);
+                                                const spawnedId = spawned?.[0]?.id || spawned?.[0]?._id;
+                                                let newTokenDoc = null;
+                                                for (let i = 0; i < 20; i++) {
+                                                    newTokenDoc = canvas.scene?.tokens?.get(spawnedId);
+                                                    if (newTokenDoc?.actor) break;
+                                                    await new Promise(r => setTimeout(r, 100));
+                                                }
                                                 if (newTokenDoc && newTokenDoc.actor) {
                                                     const newActor = newTokenDoc.actor;
                                        
@@ -8035,22 +8048,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     return;
                 }
 
-                const hasPuppeteer = actor.items.some(i => i.system?.slug === "puppeteer");
-                if (hasPuppeteer) {
-                    const currentCombat = game.combat;
-                    const currentRound = currentCombat ? currentCombat.round : 0;
-                    const lastUsedRound = actor.getFlag("necromancer-thrall-helper", "proliferationRound");
-                    
-                    if (!currentCombat || lastUsedRound !== currentRound) {
-                        count += 1;
-                        if (currentCombat) {
-                            await actor.setFlag("necromancer-thrall-helper", "proliferationRound", currentRound);
-                        }
-                        await ChatMessage.create({
-                            speaker: ChatMessage.getSpeaker({ actor: actor }),
-                            content: `<p><strong>Thrall Proliferation!</strong> <b>${actor.name}</b> twists the magic to spawn an additional thrall this round.</p>`
-                        });
-                    }
+                const hasPuppeteer = actor.items.some(i =>
+                    i.name?.toLowerCase().includes("puppeteer") ||
+                    i.system?.slug?.includes("puppeteer") ||
+                    i.system?.slug?.includes("thrall-proliferation")
+                ) || getFascinations(actor).some(f => f.includes("puppeteer"));
+
+                const currentCombat = game.combat;
+                const combatRoundKey = currentCombat ? `${currentCombat.id}-${currentCombat.round}` : null;
+                const lastUsedRound = actor.getFlag("necromancer-thrall-helper", "proliferationRound");
+                const applyProliferation = hasPuppeteer && (!currentCombat || lastUsedRound !== combatRoundKey);
+
+                if (applyProliferation) {
+                    count += 1;
                 }
 
                 const presets = getThrallPresets(actor);
@@ -8213,6 +8223,16 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                             ownership: newOwnership
                                         }
                                     });
+
+                                    if (currentSpawnIndex === 0 && applyProliferation) {
+                                        if (combatRoundKey) {
+                                            await actor.setFlag("necromancer-thrall-helper", "proliferationRound", combatRoundKey);
+                                        }
+                                        await ChatMessage.create({
+                                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                                            content: `<p><strong>Thrall Proliferation!</strong> <b>${actor.name}</b> twists the magic to spawn an additional thrall this round.</p>`
+                                        });
+                                    }
 
                                     currentSpawnIndex++;
                                     ui.notifications.info(`Spawn request for Summon ${currentSpawnIndex} sent to GM...`);
