@@ -1,0 +1,60 @@
+{
+  "base": "https://0utrider.github.io/dramatis/tiles/bloody-tendrils/",
+  "styles": {
+    "bloody": [
+      "bloody-tendrils-bloody-01.webp",
+      "bloody-tendrils-bloody-02.webp",
+      "bloody-tendrils-bloody-03.webp",
+      "bloody-tendrils-bloody-04.webp",
+      "bloody-tendrils-bloody-05.webp",
+      "bloody-tendrils-bloody-06.webp",
+      "bloody-tendrils-bloody-07.webp",
+      "bloody-tendrils-bloody-08.webp",
+      "bloody-tendrils-bloody-09.webp"
+    ],
+    "bone": [
+      "bloody-tendrils-bone-01.webp",
+      "bloody-tendrils-bone-02.webp",
+      "bloody-tendrils-bone-03.webp",
+      "bloody-tendrils-bone-04.webp",
+      "bloody-tendrils-bone-05.webp",
+      "bloody-tendrils-bone-06.webp",
+      "bloody-tendrils-bone-07.webp",
+      "bloody-tendrils-bone-08.webp",
+      "bloody-tendrils-bone-09.webp"
+    ],
+    "flesh": [
+      "bloody-tendrils-flesh-01.webp",
+      "bloody-tendrils-flesh-02.webp",
+      "bloody-tendrils-flesh-03.webp",
+      "bloody-tendrils-flesh-04.webp",
+      "bloody-tendrils-flesh-05.webp",
+      "bloody-tendrils-flesh-06.webp",
+      "bloody-tendrils-flesh-07.webp",
+      "bloody-tendrils-flesh-08.webp",
+      "bloody-tendrils-flesh-09.webp"
+    ],
+    "spirit": [
+      "bloody-tendrils-spirit-01.webp",
+      "bloody-tendrils-spirit-02.webp",
+      "bloody-tendrils-spirit-03.webp",
+      "bloody-tendrils-spirit-04.webp",
+      "bloody-tendrils-spirit-05.webp",
+      "bloody-tendrils-spirit-06.webp",
+      "bloody-tendrils-spirit-07.webp",
+      "bloody-tendrils-spirit-08.webp",
+      "bloody-tendrils-spirit-09.webp"
+    ],
+    "template": [
+      "bloody-tendrils-template-01.webp",
+      "bloody-tendrils-template-02.webp",
+      "bloody-tendrils-template-03.webp",
+      "bloody-tendrils-template-04.webp",
+      "bloody-tendrils-template-05.webp",
+      "bloody-tendrils-template-06.webp",
+      "bloody-tendrils-template-07.webp",
+      "bloody-tendrils-template-08.webp",
+      "bloody-tendrils-template-09.webp"
+    ]
+  }
+}

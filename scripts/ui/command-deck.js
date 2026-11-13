@@ -1,9 +1,24 @@
-import { prepareThrallPayload, getThrallPresets, resolveImageSet, applyRingArt, repairActorArt, tokenPortrait, isVideoPath, artKind, defaultThrallLabel, BUNDLED_THRALL } from "../system/thrall-manager.js";
+import { getGrantedSlugs, getFatalMethodName, prepareThrallPayload, getThrallPresets, resolveImageSet, applyRingArt, repairActorArt, tokenPortrait, isVideoPath, artKind, defaultThrallLabel, BUNDLED_THRALL } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
-import { executeSpawn, executeDelete, executeHazard } from "../system/socket.js";
+import { executeSpawn, createSpawnBatch, executeDelete, executeHazard } from "../system/socket.js";
 import { notify, notifyForce, placementHint } from "../system/notify.js";
+import { buildTendrilEffect, noteZoneVisibility, getZoneConfig, describeDramatisStyle } from "../system/tendril-zone.js";
 import { effectColor, effectColorNum, ownerColor, zoneBorderColor, syncAllParticleColors, EFFECT_COLOR_KEYS } from "../system/effect-colors.js";
 
+
+/**
+ * Update a document only if it still exists; a "does not exist" race (several thralls dying at
+ * once, a region already purged) is ignored instead of surfacing a SocketError.
+ */
+async function updateIfExists(doc, data) {
+    if (!doc || doc.collection?.has?.(doc.id) === false) return null;
+    try {
+        return await doc.update(data);
+    } catch (err) {
+        if (/does not exist/i.test(err?.message ?? "")) return null;
+        throw err;
+    }
+}
 
 globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
 globalThis.NecroThrallHelper.purgeGraphics = (sceneId, { regionIds = [], drawingIds = [], templateIds = [] }) => {
@@ -528,8 +543,7 @@ const THRALL_DMG_COLORS = { spirit: '#0ea5e9', void: '#7e22ce', vitality: '#b589
 
 export function actorHasSpiritFascination(actor) {
     return actor?.items.some(i => i.slug === "spirit" || i.name === "Spirit" || i.name.includes("Spirit Fascination"))
-        || actor?.flags?.pf2e?.rulesSelections?.grimFascination === "spirit"
-        || actor?.flags?.pf2e?.rulesSelections?.widespreadFascination === "spirit"
+        || getFascinations(actor).includes("spirit")
         || false;
 }
 
@@ -543,23 +557,13 @@ export function canThrallDealVitality(actor) {
         && actorHasMasteryOfLifeAndDeath(actor);
 }
 
+/**
+ * Slugs of the necromancer's chosen Grim and Widespread Fascinations, e.g. ["spirit", "void"].
+ * Read from the granted feature items (the choice is stored on the class feature, not the actor).
+ */
 export function getFascinations(actor) {
     if (!actor) return [];
-    
-    const selections = actor.flags?.pf2e?.rulesSelections || {};
-    const fascinations = new Set();
-
-    if (selections.grimFascination) {
-        fascinations.add(selections.grimFascination.toLowerCase());
-    }
-
-    if (selections.widespreadFascination) {
-        fascinations.add(selections.widespreadFascination.toLowerCase());
-    } else if (selections["widespread-fascination"]) {
-        fascinations.add(selections["widespread-fascination"].toLowerCase());
-    }
-
-    return Array.from(fascinations);
+    return [...new Set([...getGrantedSlugs(actor, "grim-fascination"), ...getGrantedSlugs(actor, "widespread-fascination")])];
 }
 Hooks.on("hoverToken", (token, hovered) => {
     if (!token?.id) return;
@@ -609,8 +613,18 @@ Hooks.on("deleteItem", async (itemDoc, options, userId) => {
         globalThis.NecroThrallHelper.purgeGraphics(targetScene.id, { regionIds: rIds, drawingIds: dIds });
     }
 });
+// Necrotic Bomb / Blast cards are posted as the caster, not whichever token the user has selected.
+Hooks.on("preCreateChatMessage", (message) => {
+    const originUuid = message.flags?.["aoe-easy-resolve"]?.itemUuid ?? message.flags?.pf2e?.origin?.uuid;
+    if (!originUuid) return;
+    const item = fromUuidSync(originUuid, { strict: false });
+    const actor = item?.parent;
+    if (!actor || actor.documentName !== "Actor" || !/^necrotic (bomb|blast)/i.test(item.name ?? "")) return;
+    message.updateSource({ speaker: ChatMessage.getSpeaker({ actor, token: actor.getActiveTokens(false, true)[0] }) });
+});
+
 Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
-    if (!game.user.isGM) return;
+    if (!game.users.activeGM?.isSelf) return; // one GM runs the cleanup, not every connected GM
 
     if (tokenDoc.getFlag("necromancer-thrall-helper", "isRecurringNightmare")) {
         const masterId = tokenDoc.getFlag("necromancer-thrall-helper", "masterId");
@@ -786,7 +800,7 @@ if (hasFleshFascination) {
 
         console.log(`Necromancer Helper | Thick Skin setting DC: ${spellDC}. Updating item flags.`);
 
-        await thickSkinItem.update({
+        await updateIfExists(thickSkinItem, {
             "flags.aoe-easy-resolve": {
                 useOverride: true,
                 saveType: "fortitude",
@@ -1459,24 +1473,26 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
             if (presets.length === 0) return notify("warn", "No thrall presets found.");
             let optionsHtml = `<option value="default">${defaultThrallLabel(attacker)}</option>` + '<option value="random">(Random Family Member)</option>';
             presets.forEach(p => { optionsHtml += (p.isUnique && canvas?.scene?.tokens?.some(t => t.getFlag("necromancer-thrall-helper", "masterId") === attacker.id && t.name === p.name)) ? `<option value="${p.id}" disabled>${p.name} (Already Active)</option>` : `<option value="${p.id}">${p.name}</option>`; });
-            new Dialog({
-                title: "Inevitable Return",
-                content: `<form><p>Select the identity for the new <b>${size === 'sm' ? 'Small' : 'Medium'}</b> thrall rising from <b>${targetToken.name}</b>:</p><div class="form-group"><label>Thrall Identity:</label><div class="form-fields"><select id="inevitable-preset">${optionsHtml}</select></div></div></form>`,
-                buttons: {
-                    summon: { icon: '<i class="fas fa-ghost"></i>', label: "Rise", callback: async (dialogHtml) => {
-                        await attacker.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
-                        if (game.user.isGM) await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Inevitable Return");
-                        else {
-                            game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Inevitable Return" });
-                            $btn.closest('.death-reaction-actions').html(`<div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;"><span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span><span style="display: block; color: #c084fc; font-size: 0.85em; font-style: italic; margin-top: 2px;">Expended: Inevitable Return</span></div>`);
-                        }
-                        const basePayload = await prepareThrallPayload(attacker, dialogHtml[0].querySelector("#inevitable-preset").value);
-                        if (!basePayload) return;
-                        executeSpawn(foundry.utils.mergeObject(basePayload, { x: targetToken.x, y: targetToken.y, elevation: targetToken.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 }, system: { traits: { size: { value: size } } } } })).catch(() => notify("error", "Failed to materialize the corpse thrall."));
-                        notify("info", "The corpse yields its thrall.");
-                    }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
-                }, default: "summon"
-            }).render(true);
+            const presetChoice = await foundry.applications.api.DialogV2.wait({
+                window: { title: "Inevitable Return", icon: "fas fa-skull" },
+                content: `<p>Select the identity for the new <b>${size === 'sm' ? 'Small' : 'Medium'}</b> thrall rising from <b>${targetToken.name}</b>:</p><div class="form-group"><label>Thrall Identity:</label><div class="form-fields"><select id="inevitable-preset">${optionsHtml}</select></div></div>`,
+                rejectClose: false,
+                buttons: [
+                    { action: "rise", label: "Rise", icon: "fas fa-ghost", default: true, callback: (event, button, dialog) => dialog.element.querySelector("#inevitable-preset").value },
+                    { action: "cancel", label: "Cancel", icon: "fas fa-times" }
+                ]
+            });
+            if (!presetChoice || presetChoice === "cancel") return;
+            await attacker.setFlag("necromancer-thrall-helper", `harvested_${targetId}`, true);
+            if (game.user.isGM) await message.setFlag("necromancer-thrall-helper", "reactionUsed", "Inevitable Return");
+            else {
+                game.socket.emit("module.necromancer-thrall-helper", { action: "lockDeathReaction", messageId: message.id, label: "Inevitable Return" });
+                $btn.closest('.death-reaction-actions').html(`<div style="background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 4px; padding: 6px; text-align: center; margin-top: 4px;"><span style="text-decoration: line-through; color: #666; font-weight: bold; font-size: 0.9em; display: block;"><i class="fas fa-ban"></i> Death Reaction</span><span style="display: block; color: #c084fc; font-size: 0.85em; font-style: italic; margin-top: 2px;">Expended: Inevitable Return</span></div>`);
+            }
+            const basePayload = await prepareThrallPayload(attacker, presetChoice);
+            if (!basePayload) return;
+            executeSpawn(foundry.utils.mergeObject(basePayload, { x: targetToken.x, y: targetToken.y, elevation: targetToken.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 }, system: { traits: { size: { value: size } } } } }), canvas.scene.id, { corpse: { tokenId: targetToken.id, sceneId: canvas.scene.id, name: targetToken.name } }).catch(() => notify("error", "Failed to materialize the corpse thrall."));
+            notify("info", "The corpse yields its thrall.");
         }
 
         else if ($btn.hasClass('flesh-terrain-btn')) {
@@ -1566,8 +1582,9 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
                             if (preset?.isUnique) { if (selectedUnique.has(val)) return notify("error", `${preset.name} is unique and cannot be summoned multiple times.`); selectedUnique.add(val); }
                             selections.push(val);
                         }
+                        const batch = createSpawnBatch();
                         let currentSpawnIndex = 0;
-                        placementHint(`Click the canvas to sprout Thrall 1 adjacent to the field. Right-click to cancel.`);
+                        placementHint(`Click the canvas to sprout Thrall 1 adjacent to the field. Right-click or Esc undoes the last one; Enter sends early.`);
                         document.body.style.cursor = "crosshair"; canvas.app.view.style.cursor = "crosshair";
                         const ghost = new PIXI.Graphics(); ghost.beginFill(0xcc0000, 0.4); ghost.lineStyle(2, 0xff0000, 0.8); ghost.drawRect(0, 0, canvas.grid.size, canvas.grid.size); ghost.endFill(); ghost.zIndex = 1000; ghost.position.set(-1000, -1000); canvas.tokens.addChild(ghost);
                         const updateGhost = (ev) => { const pos = ev.data.getLocalPosition(canvas.app.stage); const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos; ghost.position.set(snapped.x, snapped.y); };
@@ -1575,15 +1592,23 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
                         const cleanUp = () => { document.body.style.cursor = ""; canvas.app.view.style.cursor = ""; canvas.stage.off("pointermove", updateGhost); ghost.destroy(); };
                         const interactionHandler = async (ev) => {
                             if (ev.data.button !== 0 && ev.data.button !== 2) return canvas.stage.once("pointerdown", interactionHandler);
-                            if (ev.data.button === 2) { notify("info", "Sprouting cancelled."); return cleanUp(); }
+                            if (ev.data.button === 2) {
+                                if (batch.undo()) { currentSpawnIndex--; placementHint(`Place Thrall ${currentSpawnIndex + 1}.`); return canvas.stage.once("pointerdown", interactionHandler); }
+                                batch.cancel(); notify("info", "Sprouting cancelled."); return cleanUp();
+                            }
                             const pos = ev.data.getLocalPosition(canvas.app.stage), snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
                             const basePayload = await prepareThrallPayload(attacker, selections[currentSpawnIndex]);
-                            if (!basePayload) { return cleanUp(); }
-                            executeSpawn(foundry.utils.mergeObject(basePayload, { x: snapped.x, y: snapped.y, elevation: targetToken?.document?.elevation || attacker?.getActiveTokens()[0]?.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 } } })).catch(() => notify("error", "Failed to materialize the thrall."));
+                            if (!basePayload) { batch.finish(); return cleanUp(); }
+                            batch.add(foundry.utils.mergeObject(basePayload, { x: snapped.x, y: snapped.y, elevation: targetToken?.document?.elevation || attacker?.getActiveTokens()[0]?.document?.elevation || 0, delta: { ownership: { [game.user.id]: 3 } } }));
                             currentSpawnIndex++;
                             if (currentSpawnIndex < count) { placementHint(`Place Thrall ${currentSpawnIndex + 1}.`); canvas.stage.once("pointerdown", interactionHandler); }
-                            else { cleanUp(); $btn.remove(); notify("info", "All blood thralls sprouted."); }
+                            else { cleanUp(); batch.finish(); $btn.remove(); notify("info", "All blood thralls sprouted."); }
                         };
+                        batch.bindKeys({
+                            onUndo: () => { currentSpawnIndex--; placementHint(`Place Thrall ${currentSpawnIndex + 1}.`); },
+                            onCancel: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); },
+                            onFinish: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); }
+                        });
                         canvas.stage.once("pointerdown", interactionHandler);
                     }}, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
                 }, default: "summon"
@@ -1990,7 +2015,7 @@ Hooks.on("deleteToken", async (tokenDoc, options, userId) => {
     if (game.combat) {
         const orphanedCombatants = game.combat.combatants.filter(c => c.tokenId === tokenDoc.id);
         if (orphanedCombatants.length > 0) {
-            const ids = orphanedCombatants.map(c => c.id);
+            const ids = orphanedCombatants.map(c => c.id).filter(id => game.combat?.combatants.has(id));
             game.combat.deleteEmbeddedDocuments("Combatant", ids).catch(err => {
                 console.warn("Necromancer Helper | Ignored safe-delete warning:", err);
             });
@@ -2205,8 +2230,8 @@ Hooks.on("pf2e.startTurn", async (combatant, combat, userId) => {
                 await anchor.setFlag("necromancer-thrall-helper", "hordeRadius", newRadius);
                 pixels = (newRadius / gridDist) * gridSize;
                 
-                await canvas.scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id)?.update({ shapes: [{ type: "ellipse", hole: false, x: cX, y: cY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
-                await canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id)?.update({ x: cX - pixels, y: cY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
+                await updateIfExists(canvas.scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id), { shapes: [{ type: "ellipse", hole: false, x: cX, y: cY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
+                await updateIfExists(canvas.scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === anchor.id), { x: cX - pixels, y: cY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
                 
                 ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: combatant.actor }), content: `<p><strong>Zombie Horde Expands!</strong> The horde consumes ${thralls.length} thrall(s), swelling its radius to ${newRadius} feet!</p>` });
             }
@@ -2234,7 +2259,7 @@ Hooks.on("createToken", async (tokenDoc, options, userId) => {
 
     const activeNecroToken = masterActor.getActiveTokens().find(t => t.scene?.id === tokenDoc.parent?.id);
     if (activeNecroToken && activeNecroToken.document.elevation !== tokenDoc.elevation) {
-        await tokenDoc.update({ elevation: activeNecroToken.document.elevation });
+        await updateIfExists(tokenDoc, { elevation: activeNecroToken.document.elevation });
     }
 
     const isCustomThrall = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") === masterId;
@@ -2432,6 +2457,21 @@ globalThis.NecroThrallHelper.checkNightmareHaunt = async (nightmareTokenDoc, spe
     });
 };
 
+// A tendril's save region (tethered to the token by tendrilTetherId) moves with the token, like its aura does.
+Hooks.on("updateToken", async (tokenDoc, changes) => {
+    if (!game.users.activeGM?.isSelf) return;
+    if (!("x" in changes || "y" in changes || "width" in changes || "height" in changes)) return;
+    const tetherId = tokenDoc.getFlag("necromancer-thrall-helper", "tendrilTetherId");
+    const scene = tokenDoc.parent;
+    if (!tetherId || !scene) return;
+    const size = scene.grid.size;
+    const cx = tokenDoc.x + (tokenDoc.width * size) / 2;
+    const cy = tokenDoc.y + (tokenDoc.height * size) / 2;
+    for (const region of scene.regions.filter(r => r.getFlag("necromancer-thrall-helper", "tendrilTetherId") === tetherId)) {
+        const shapes = region.shapes.map(sh => ({ ...sh.toObject(), x: cx, y: cy }));
+        await updateIfExists(region, { shapes });
+    }
+});
 Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
     if (!("x" in changes || "y" in changes)) return;
 
@@ -2450,8 +2490,8 @@ Hooks.on("updateToken", async (tokenDoc, changes, options, userId) => {
         const region = scene.regions.find(r => r.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
         const drawing = scene.drawings.find(d => d.getFlag("necromancer-thrall-helper", "anchorId") === tokenDoc.id);
         
-        if (region) await region.update({ shapes: [{ type: "ellipse", hole: false, x: tCenterX, y: tCenterY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
-        if (drawing) await drawing.update({ x: tCenterX - pixels, y: tCenterY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
+        if (region) await updateIfExists(region, { shapes: [{ type: "ellipse", hole: false, x: tCenterX, y: tCenterY, radiusX: pixels, radiusY: pixels, rotation: 0 }] });
+        if (drawing) await updateIfExists(drawing, { x: tCenterX - pixels, y: tCenterY - pixels, shape: { type: "e", width: pixels * 2, height: pixels * 2 } });
     }
 
     if (game.user.id !== userId) return;
@@ -2949,6 +2989,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             hasSongOfTheSoul: hasSongOfTheSoul,
             actorName: actor?.name || "Necromancer",
             actorLevel: actor?.level || 1,
+            fatalMethod: getFatalMethodName(actor),
             maxFocus: maxFocus,
             focusPips: focusPips,
             hasBonyBarrage: hasBonyBarrage,
@@ -3374,6 +3415,33 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     <button type="button" id="use-bundled-art-btn" data-tooltip="Fill the fields above with the bundled art"><i class="fas fa-skull"></i> Use bundled art</button>
                 `;
 
+                // Bloody Tendril only: how the danger-zone aura looks.
+                const zoneCfg = getZoneConfig(actor);
+                const zoneModes = { outline: "Outline", dramatis: "Outrider: Dramatis", custom: "Custom file(s)" };
+                const zoneControls = `
+                    <hr>
+                    <h4>Zone Appearance</h4>
+                    <div class="form-group">
+                        <label>Zone style</label>
+                        <select id="tendril-zone-mode">${Object.entries(zoneModes).map(([v, l]) => `<option value="${v}" ${v === zoneCfg.mode ? "selected" : ""}>${l}</option>`).join("")}</select>
+                    </div>
+                    <small class="tz-dramatis">${foundry.utils.escapeHTML(describeDramatisStyle(actor))}</small>
+                    <div class="form-group tz-custom">
+                        <label>File(s)</label>
+                        <input type="text" id="tendril-zone-path" value="${foundry.utils.escapeHTML(zoneCfg.customPath)}" placeholder="path/zone.webp or wildcard: path/zone-*.webp">
+                        <button type="button" class="img-picker-btn" data-target="tendril-zone-path" data-type="imagevideo"><i class="fas fa-file-import"></i></button>
+                    </div>
+                    <small class="tz-custom">Wildcards (*) work for files on this server, not remote URLs.</small>
+                    <div class="form-group">
+                        <label>Opacity</label>
+                        <div class="scale-wrap">
+                            <input type="range" class="scale-slider" id="tendril-zone-alpha" data-val-target="tendril-zone-alpha-val" min="0.05" max="1" step="0.05" value="${zoneCfg.alpha}">
+                            <input type="number" min="0.05" max="1" step="0.05" value="${zoneCfg.alpha}" id="tendril-zone-alpha-val" class="scale-num" data-slider="tendril-zone-alpha" title="Type an exact value">
+                        </div>
+                    </div>
+                    <small id="tendril-zone-hint"></small>
+                `;
+
                 let optionsHtml = "";
                 let groupsHtml = "";
 
@@ -3422,6 +3490,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 <input type="checkbox" id="${key}-ring-link" ${c.ringScale === undefined ? "checked" : ""}>
                             </div>
                             ${key === "thrall" ? bundledControls : ""}
+                            ${key === "tendril" ? zoneControls : ""}
                         </div>
                     `;
                 }
@@ -3449,6 +3518,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             dialogHtml.find(".summon-cfg-group").hide();
                             dialogHtml.find(`.summon-cfg-group[data-target="${selected}"]`).show();
                         });
+
+                        // No file-browser permission: hide the picker buttons; paste a path or URL instead.
+                        if (!game.user.hasPermission("FILES_BROWSE")) dialogHtml.find(".img-picker-btn").hide();
 
                         dialogHtml.find(".img-picker-btn").on("click", (evt) => {
                             evt.preventDefault();
@@ -3484,13 +3556,39 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 video: "Dynamic token rings don't support animated art. Set a Ring Subject image to use the ring.",
                                 mixed: "Ring is skipped automatically for any video file selected (unless a Ring Subject is set)."
                             }[kind] ?? cutout;
-                            box.prop("disabled", kind === "video").attr("title", cutout);
+                            if (kind === "video") {
+                                // Remember the preference once, then show the box as off and locked.
+                                if (box.data("savedRing") === undefined) box.data("savedRing", box.is(":checked"));
+                                box.prop("checked", false).prop("disabled", true);
+                            } else {
+                                box.prop("disabled", false);
+                                if (box.data("savedRing") !== undefined) {
+                                    box.prop("checked", box.data("savedRing"));
+                                    box.removeData("savedRing");
+                                }
+                            }
+                            box.attr("title", cutout);
                             dialogHtml.find(`#${key}-ring-hint`).text(text);
                         };
                         for (const key of Object.keys(configKeys)) {
                             dialogHtml.find(`#${key}-img-path, #${key}-subject-path`).on("input change", () => syncRingHint(key));
                             syncRingHint(key);
                         }
+
+                        // Zone style: show only the fields that apply, with a hint per mode.
+                        const zoneHints = {
+                            outline: "Calm red outline; readable on light and dark maps.",
+                            dramatis: "Random tile per tendril from 0utrider/dramatis. Outline hidden.",
+                            custom: "One file per tendril (wildcard picks randomly). Outline hidden."
+                        };
+                        const syncZoneMode = () => {
+                            const mode = dialogHtml.find("#tendril-zone-mode").val();
+                            dialogHtml.find(".tz-dramatis").toggle(mode === "dramatis");
+                            dialogHtml.find(".tz-custom").toggle(mode === "custom");
+                            dialogHtml.find("#tendril-zone-hint").text(zoneHints[mode]);
+                        };
+                        dialogHtml.find("#tendril-zone-mode").on("change", syncZoneMode);
+                        syncZoneMode();
 
                         // Fill the Base Thrall fields with the bundled art; save as usual.
                         dialogHtml.find("#use-bundled-art-btn").on("click", (evt) => {
@@ -3527,7 +3625,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                 let updates = {};
                                 for (const [key, map] of Object.entries(configKeys)) {
                                     updates[`flags.necromancer-thrall-helper.${map.img}`] = dialogHtml.find(`#${key}-img-path`).val();
-                                    updates[`flags.necromancer-thrall-helper.${map.ring}`] = dialogHtml.find(`#${key}-ring-enabled`).is(":checked");
+                                    const ringBox = dialogHtml.find(`#${key}-ring-enabled`);
+                                    // A disabled box (video art) shows unchecked; keep the user's real preference.
+                                    updates[`flags.necromancer-thrall-helper.${map.ring}`] =
+                                        ringBox.is(":disabled") && ringBox.data("savedRing") !== undefined
+                                            ? ringBox.data("savedRing")
+                                            : ringBox.is(":checked");
                                     updates[`flags.necromancer-thrall-helper.${map.scale}`] = parseFloat(dialogHtml.find(`#${key}-img-scale`).val());
                                     updates[`flags.necromancer-thrall-helper.${map.portrait}`] = dialogHtml.find(`#${key}-portrait-path`).val().trim();
                                     updates[`flags.necromancer-thrall-helper.${map.ringSubject}`] = dialogHtml.find(`#${key}-subject-path`).val().trim();
@@ -3537,6 +3640,12 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                         updates[`flags.necromancer-thrall-helper.${map.ringScale}`] = parseFloat(dialogHtml.find(`#${key}-ring-scale`).val());
                                     }
                                 }
+                                const zoneAlpha = parseFloat(dialogHtml.find("#tendril-zone-alpha").val());
+                                updates["flags.necromancer-thrall-helper.tendrilZone"] = {
+                                    mode: dialogHtml.find("#tendril-zone-mode").val(),
+                                    customPath: dialogHtml.find("#tendril-zone-path").val().trim(),
+                                    alpha: Number.isFinite(zoneAlpha) ? Math.min(1, Math.max(0.05, zoneAlpha)) : 0.3
+                                };
                                 updates["flags.necromancer-thrall-helper.useBundledDefault"] = dialogHtml.find("#use-bundled-default").is(":checked");
                                 await actor.update(updates);
                                 notify("info", "Summon configurations updated successfully.");
@@ -3667,10 +3776,11 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
 
                 await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
+                const batch = createSpawnBatch();
                 let currentSpawnIndex = 0;
                 const maxSpawns = 5;
 
-                placementHint(`Click the canvas to place Skeletal Lancer 1 of ${maxSpawns} within 60 feet. Right-click to finish early.`);
+                placementHint(`Click the canvas to place Skeletal Lancer 1 of ${maxSpawns} within 60 feet. Right-click or Esc undoes the last one; Enter sends early.`);
                 document.body.style.cursor = "crosshair";
                 canvas.app.view.style.cursor = "crosshair";
 
@@ -3727,6 +3837,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     }
 
                     if (evt.data.button === 2) {
+                        if (batch.undo()) {
+                            currentSpawnIndex--;
+                            placementHint(`Place Skeletal Lancer ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click or Esc undoes the last one; Enter sends early.`);
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
+                        batch.cancel();
                         if (currentSpawnIndex === 0) {
                             await actor.update({ "system.resources.focus.value": currentFocus });
                         }
@@ -3761,17 +3878,23 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     await applyCustomVisuals(finalPayload, actor, "lancer");
 
                     currentSpawnIndex++;
-                    await executeSpawn(finalPayload).catch(err => console.error(err));
+                    await batch.add(finalPayload);
 
                     if (currentSpawnIndex < maxSpawns) {
                         placementHint(`Place Skeletal Lancer ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click to stop.`);
                         canvas.stage.once("pointerdown", interactionHandler);
                     } else {
                         cleanUp();
+                        batch.finish();
                         notify("info", "All 5 Skeletal Lancers deployed.");
                     }
                 };
 
+                batch.bindKeys({
+                    onUndo: () => { currentSpawnIndex--; placementHint(`Place Skeletal Lancer ${currentSpawnIndex + 1} of ${maxSpawns}.`); },
+                    onCancel: () => { canvas.stage.off("pointerdown", interactionHandler); if (currentSpawnIndex === 0) actor.update({ "system.resources.focus.value": currentFocus }); cleanUp(); },
+                    onFinish: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); }
+                });
                 canvas.stage.once("pointerdown", interactionHandler);
             });
         }
@@ -3995,8 +4118,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 return;
             }
 
+            const batch = createSpawnBatch();
             let currentSpawn = 0;
-            placementHint(`Click to place Thrall 1 of ${maxSpawns}. Right-click to stop early.`);
+            placementHint(`Click to place Thrall 1 of ${maxSpawns}. Right-click or Esc undoes the last one; Enter sends early.`);
             document.body.style.cursor = "crosshair";
             canvas.app.view.style.cursor = "crosshair";
 
@@ -4041,7 +4165,10 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     canvas.stage.once("pointerdown", spawnHandler);
                     return;
                 }
-                if (evt.data.button === 2) { cleanUpSpawns(); return; }
+                if (evt.data.button === 2) {
+                    if (batch.undo()) { currentSpawn--; placementHint(`Place Thrall ${currentSpawn + 1} of ${maxSpawns}.`); canvas.stage.once("pointerdown", spawnHandler); return; }
+                    batch.cancel(); cleanUpSpawns(); return;
+                }
 
                 const pos = evt.data.getLocalPosition(canvas.app.stage);
                 let spawnX = pos.x; let spawnY = pos.y;
@@ -4081,15 +4208,21 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 currentSpawn++;
                 notify("info", `Spawn request ${currentSpawn} queued...`);
                 
-                executeSpawn(finalPayload).catch(err => console.error(err));
+                batch.add(finalPayload);
 
                 if (currentSpawn < maxSpawns) {
                     canvas.stage.once("pointerdown", spawnHandler);
                 } else {
                     cleanUpSpawns();
+                    batch.finish();
                     notify("info", "All summons requested.");
                 }
             };
+            batch.bindKeys({
+                onUndo: () => { currentSpawn--; placementHint(`Place Thrall ${currentSpawn + 1} of ${maxSpawns}.`); },
+                onCancel: () => { canvas.stage.off("pointerdown", spawnHandler); cleanUpSpawns(); },
+                onFinish: () => { canvas.stage.off("pointerdown", spawnHandler); cleanUpSpawns(); }
+            });
             canvas.stage.once("pointerdown", spawnHandler);
         };
         globalThis.NecroThrallHelper.executeSheddingMatrix = executeSheddingMatrix;
@@ -4381,10 +4514,11 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                               </div>`
                                 });
 
+                                const batch = createSpawnBatch();
                                 let currentSpawnIndex = 0;
                                 const maxSpawns = 20;
 
-                                placementHint(`Click to place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click to stop early.`);
+                                placementHint(`Click to place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click or Esc undoes the last one; Enter sends early.`);
                                 document.body.style.cursor = "crosshair";
                                 canvas.app.view.style.cursor = "crosshair";
 
@@ -4427,6 +4561,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     }
 
                                     if (evt.data.button === 2) {
+                                        if (batch.undo()) {
+                                            currentSpawnIndex--;
+                                            placementHint(`Place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click or Esc undoes the last one; Enter sends early.`);
+                                            canvas.stage.once("pointerdown", interactionHandler);
+                                            return;
+                                        }
+                                        batch.cancel();
                                         cleanUp();
                                         return;
                                     }
@@ -4435,7 +4576,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(pos) : pos;
 
                                     const basePayload = await prepareThrallPayload(actor, presetId);
-                                    if (!basePayload) { cleanUp(); return; }
+                                    if (!basePayload) { batch.finish(); cleanUp(); return; }
 
                                     const finalPayload = foundry.utils.mergeObject(basePayload, {
                                         x: snapped.x,
@@ -4445,16 +4586,22 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     });
 
                                     currentSpawnIndex++;
-                                    executeSpawn(finalPayload).catch(err => console.error(err));
+                                    batch.add(finalPayload);
 
                                     if (currentSpawnIndex < maxSpawns) {
-                                        placementHint(`Place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click to stop.`);
+                                        placementHint(`Place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}. Right-click or Esc undoes the last one; Enter sends early.`);
                                         canvas.stage.once("pointerdown", interactionHandler);
                                     } else {
                                         cleanUp();
+                                        batch.finish();
                                     }
                                 };
 
+                                batch.bindKeys({
+                                    onUndo: () => { currentSpawnIndex--; placementHint(`Place Thrall ${currentSpawnIndex + 1} of ${maxSpawns}.`); },
+                                    onCancel: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); },
+                                    onFinish: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); }
+                                });
                                 canvas.stage.once("pointerdown", interactionHandler);
                             }
                         },
@@ -8335,7 +8482,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     i.name?.toLowerCase().includes("puppeteer") ||
                     i.system?.slug?.includes("puppeteer") ||
                     i.system?.slug?.includes("thrall-proliferation")
-                ) || getFascinations(actor).some(f => f.includes("puppeteer"));
+                ) || getFatalMethodName(actor)?.toLowerCase().includes("puppeteer");
 
                 const currentCombat = game.combat;
                 const combatRoundKey = currentCombat ? `${currentCombat.id}-${currentCombat.round}` : null;
@@ -8405,9 +8552,11 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     selections.push(val);
                                 }
 
+                                const batch = createSpawnBatch();
+                                let proliferationAnnounced = false;
                                 let currentSpawnIndex = 0;
 
-                                placementHint(`Click the canvas to place Summon ${currentSpawnIndex + 1}. Right-click to cancel.`);
+                                placementHint(`Click the canvas to place Summon ${currentSpawnIndex + 1}. Right-click or Esc undoes the last one; Enter sends early.`);
                                 document.body.style.cursor = "crosshair";
                                 canvas.app.view.style.cursor = "crosshair";
 
@@ -8473,6 +8622,13 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     }
 
                                     if (event.data.button === 2) {
+                                        if (batch.undo()) {
+                                            currentSpawnIndex--;
+                                            placementHint(`Place Summon ${currentSpawnIndex + 1}. Right-click or Esc undoes the last one; Enter sends early.`);
+                                            canvas.stage.once("pointerdown", interactionHandler);
+                                            return;
+                                        }
+                                        batch.cancel();
                                         notify("info", "Summoning cancelled.");
                                         cleanUp();
                                         return;
@@ -8491,7 +8647,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     const presetId = selections[currentSpawnIndex];
                                     const basePayload = await prepareThrallPayload(actor, presetId);
                                     
-                                    if (!basePayload) { cleanUp(); return; }
+                                    if (!basePayload) { batch.finish(); cleanUp(); return; }
 
                                     const ownerIds = Object.keys(actor.ownership).filter(k => actor.ownership[k] === 3 && k !== "default");
                                     const newOwnership = { default: 0 };
@@ -8507,7 +8663,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                         }
                                     });
 
-                                    if (currentSpawnIndex === 0 && applyProliferation) {
+                                    if (currentSpawnIndex === 0 && applyProliferation && !proliferationAnnounced) {
+                                        proliferationAnnounced = true;
                                         if (combatRoundKey) {
                                             await actor.setFlag("necromancer-thrall-helper", "proliferationRound", combatRoundKey);
                                         }
@@ -8518,22 +8675,25 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                                     }
 
                                     currentSpawnIndex++;
-                                    notify("info", `Spawn request for Summon ${currentSpawnIndex} sent to GM...`);
+                                    notify("info", `Summon ${currentSpawnIndex} placed.`);
 
-                                    executeSpawn(finalPayload).catch(err => {
-                                        console.error("Necromancer Helper | Spawn execution failed:", err);
-                                        notify("error", "Failed to materialize the thrall.");
-                                    });
+                                    batch.add(finalPayload);
 
                                     if (currentSpawnIndex < count) {
                                         placementHint(`Place Summon ${currentSpawnIndex + 1}.`);
                                         canvas.stage.once("pointerdown", interactionHandler);
                                     } else {
                                         cleanUp();
+                                        batch.finish();
                                         notify("info", "All summons placed.");
                                     }
                                 };
 
+                                batch.bindKeys({
+                                    onUndo: () => { currentSpawnIndex--; placementHint(`Place Summon ${currentSpawnIndex + 1}.`); },
+                                    onCancel: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); },
+                                    onFinish: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); }
+                                });
                                 canvas.stage.once("pointerdown", interactionHandler);
                             }
                         },
@@ -8727,7 +8887,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 };
 
                 if (!tendrilsSpell) {
-                    const spellData = { name: "Bloody Tendrils", type: "spell", img: "icons/magic/blood/blood-spatter-splatter-red.webp", system: spellSystemData };
+                    const spellData = { name: "Bloody Tendrils", type: "spell", img: "icons/skills/wounds/blood-spurt-spray-red.webp", system: spellSystemData };
                     const created = await actor.createEmbeddedDocuments("Item", [spellData]);
                     tendrilsSpell = created[0];
                 } else {
@@ -8746,8 +8906,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 await tendrilsSpell.setFlag("aoe-easy-resolve", "saveDC", exactDC);
                 await tendrilsSpell.setFlag("aoe-easy-resolve", "saveType", "reflex");
 
+                const batch = createSpawnBatch();
                 let currentSpawnIndex = 0;
-                placementHint(`Click the canvas to place Tendril ${currentSpawnIndex + 1} within 30 feet. Right-click to cancel.`);
+                placementHint(`Click the canvas to place Tendril ${currentSpawnIndex + 1} within 30 feet. Right-click to stop.`);
                 document.body.style.cursor = "crosshair";
                 canvas.app.view.style.cursor = "crosshair";
 
@@ -8767,10 +8928,15 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 }
                 const gridSize = canvas.grid.size;
                 const ghost = new PIXI.Graphics();
+                // Preview of the aura the tendril will carry (same colours as its Aura effect), then the token itself.
+                const zoneAlpha = getZoneConfig(actor).alpha;
+                ghost.beginFill(0xc0392b, zoneAlpha / 3);
+                ghost.lineStyle(2, 0xc0392b, Math.max(0.4, zoneAlpha));
+                ghost.drawCircle(gridSize/2, gridSize/2, gridSize * 2.5);
+                ghost.endFill();
                 ghost.beginFill(0x990000, 0.4);
                 ghost.lineStyle(2, 0x990000, 0.8);
-                ghost.drawCircle(gridSize/2, gridSize/2, gridSize/2); 
-                ghost.drawCircle(gridSize/2, gridSize/2, gridSize * 2.5);
+                ghost.drawCircle(gridSize/2, gridSize/2, gridSize/2);
                 ghost.endFill();
                 ghost.zIndex = 1000;
                 ghost.position.set(-1000, -1000);
@@ -8806,10 +8972,19 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                         return;
                     }
                     if (event.data.button === 2) {
+                        if (batch.undo()) {
+                            currentSpawnIndex--;
+                            placementHint(`Place Tendril ${currentSpawnIndex + 1} of ${count}. Right-click or Esc undoes the last one; Enter sends early.`);
+                            canvas.stage.once("pointerdown", interactionHandler);
+                            return;
+                        }
+                        batch.cancel();
                         if (currentSpawnIndex === 0) {
                             await actor.update({ "system.resources.focus.value": currentFocus });
+                            notify("info", "Conjuration cancelled.");
+                        } else {
+                            notify("info", `Placed ${currentSpawnIndex} tendril(s).`);
                         }
-                        notify("info", "Conjuration cancelled.");
                         cleanUp();
                         return;
                     }
@@ -8845,8 +9020,16 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                     });
                     await applyCustomVisuals(finalPayload, actor, "tendril");
 
+                    // The danger zone is a PF2e Aura (like Spell Effect: Bless) on the token itself, so it
+                    // follows the token. It only draws; the save and damage come from the hidden region below.
+                    // PF2e measures auras from the token's edge: 2 squares past it matches the 2.5-square circle.
+                    const auraFeet = 2 * canvas.scene.grid.distance;
+                    finalPayload.delta = finalPayload.delta || {};
+                    const { effect: zoneEffect, pending: zonePending } = await buildTendrilEffect(actor, auraFeet);
+                    finalPayload.delta.items = [...(finalPayload.delta.items || []), zoneEffect];
+                    if (zonePending) foundry.utils.setProperty(finalPayload, "flags.necromancer-thrall-helper.pendingZone", zonePending);
+
                     currentSpawnIndex++;
-                    executeSpawn(finalPayload).catch(err => console.error(err));
 
                     const regionData = {
                         name: `Bloody Tendril Hazard`,
@@ -8866,7 +9049,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             type: "executeScript",
                             system: {
                                 events: ["tokenTurnEnd"],
-                                source: `console.log('AoE Easy Resolve | Tendril Region Triggered!', event);\nif (game.modules.get('aoe-easy-resolve')?.api?.handleRegionEvent) {\n  game.modules.get('aoe-easy-resolve').api.handleRegionEvent(event, '${tendrilsSpell.uuid}');\n}`
+                                source: `if (game.modules.get('aoe-easy-resolve')?.api?.handleRegionEvent) {\n  game.modules.get('aoe-easy-resolve').api.handleRegionEvent(event, '${tendrilsSpell.uuid}');\n}`
                             }
                         }],
                         flags: {
@@ -8882,33 +9065,26 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                             }
                         }
                     };
-                    const drawingData = {
-                        author: game.user.id,
-                        shape: { type: "e", width: gridSize * 5, height: gridSize * 5 },
-                        x: spawnX + (gridSize/2) - (gridSize * 2.5),
-                        y: spawnY + (gridSize/2) - (gridSize * 2.5),
-                        fillType: 1,
-                        fillColor: "#880000",
-                        fillAlpha: 0.25,
-                        strokeWidth: 2,
-                        strokeColor: "#880000",
-                        strokeAlpha: 0.8,
-                        flags: {
-                            "necromancer-thrall-helper": { tendrilTetherId: tetherId }
-                        }
-                    };
                     
-                    await executeHazard(regionData, drawingData);
+                    // The save region is created with the token, only if the spawn is approved.
+                    await batch.add(finalPayload, { region: regionData });
 
                     if (currentSpawnIndex < count) {
-                        placementHint(`Place Tendril ${currentSpawnIndex + 1}.`);
+                        placementHint(`Place Tendril ${currentSpawnIndex + 1} of ${count}. Right-click or Esc undoes the last one; Enter sends early.`);
                         canvas.stage.once("pointerdown", interactionHandler);
                     } else {
                         cleanUp();
+                        batch.finish();
                         notify("info", "All tendrils placed.");
                     }
                 };
 
+                batch.bindKeys({
+                    onUndo: () => { currentSpawnIndex--; placementHint(`Place Tendril ${currentSpawnIndex + 1} of ${count}. Right-click or Esc undoes the last one; Enter sends early.`); },
+                    onCancel: () => { canvas.stage.off("pointerdown", interactionHandler); if (currentSpawnIndex === 0) actor.update({ "system.resources.focus.value": currentFocus }); cleanUp(); },
+                    onFinish: () => { canvas.stage.off("pointerdown", interactionHandler); cleanUp(); }
+                });
+                noteZoneVisibility();
                 canvas.stage.once("pointerdown", interactionHandler);
             });
         }
