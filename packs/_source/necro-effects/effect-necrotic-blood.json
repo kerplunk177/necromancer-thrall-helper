@@ -1,0 +1,44 @@
+{
+  "_id": "necroNecroBlood0",
+  "name": "Effect: Necrotic Blood",
+  "type": "effect",
+  "img": "icons/magic/unholy/strike-beam-blood-red-purple.webp",
+  "system": {
+    "slug": "effect-necrotic-blood",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.Q6cvsLytYffpeN3g]{Dread Mosquito Storm}</p><p><b>Necrotic Blood (Stage 1)</b><br>Stage 1: 3d10 void, Sickened 1, Weakness 5 Bleed.<br>Stage 2: 4d10 void, Sickened 2, Weakness 10 Bleed.<br>Stage 3: 5d10 void, Sickened 3, Weakness 20 Bleed.<br><br><i>If this creature dies, a thrall rises from its corpse.</i></p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-end",
+      "value": 6,
+      "unit": "rounds"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "Weakness",
+        "type": "bleed",
+        "value": 5
+      }
+    ],
+    "level": {
+      "value": 18
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroNecroBlood0"
+}

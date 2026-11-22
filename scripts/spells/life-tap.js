@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeLifeTap({ actor, tokenDoc }) {
     const lifeTapDC = getSpellDC(actor);
@@ -32,7 +33,7 @@ export async function executeLifeTap({ actor, tokenDoc }) {
 
     const targetToken = validTargets[0];
 
-    new Dialog({
+    new NecroDialog({
         title: "Life Tap",
         content: `<p>Siphon life essence through <b>${tokenDoc.name}</b> targeting <b>${targetToken.name}</b>?</p>`,
         buttons: {
@@ -60,5 +61,5 @@ export async function executeLifeTap({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "tap"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

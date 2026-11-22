@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeTemporaryPossession({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -31,7 +32,7 @@ export async function executeTemporaryPossession({ actor, tokenDoc }) {
 
     const tpSpell = await ensureNecroSpell(actor, {
         name: "Temporary Possession",
-        img: "icons/magic/control/control-influence-puppet-purple.webp",
+        img: "icons/magic/unholy/strike-body-explode-disintegrate.webp",
         systemData: {
             level: { value: spellRank },
             traits: { value: ["necromancer", "uncommon", "concentrate", "focus", "incapacitation", "manipulate", "possession"] },
@@ -40,7 +41,7 @@ export async function executeTemporaryPossession({ actor, tokenDoc }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Temporary Possession",
         content: `<p>Destroy <b>${tokenDoc.name}</b> to force its animus into <b>${targetToken.name}</b>?</p>`,
         buttons: {
@@ -73,5 +74,5 @@ export async function executeTemporaryPossession({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "possess"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

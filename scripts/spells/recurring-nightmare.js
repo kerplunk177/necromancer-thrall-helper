@@ -1,6 +1,7 @@
 import { executeSpawn } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { getOrImportActor, applyCustomVisuals, createRangeIndicator, attachGhostHUD } from "./spell-helpers.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export function bindRecurringNightmareButtons(deck, html) {
     const nightmareBtn = html.querySelector(".conjure-nightmare-btn, .sustain-nightmare-btn");
@@ -122,7 +123,7 @@ export function bindRecurringNightmareButtons(deck, html) {
 
                 deck.render({ force: false });
 
-                await ChatMessage.create({
+                await createNecroCard({
                     speaker: ChatMessage.getSpeaker({ actor }),
                     flavor: `<strong>Recurring Nightmare</strong>`,
                     content: `<p><b>${actor.name}</b> ${isSustain ? "Sustains the nightmare, resummoning" : "conjures"} the <b>Recurring Nightmare</b> into reality!</p>`

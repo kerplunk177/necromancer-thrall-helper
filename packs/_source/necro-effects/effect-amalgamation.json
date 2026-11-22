@@ -1,0 +1,61 @@
+{
+  "_id": "necroAmalgamatn0",
+  "name": "Effect: Amalgamation",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/summon-ancient-fleshforged.webp",
+  "system": {
+    "slug": "effect-amalgamation",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.R3nv6GqV8K6SjGoV]{Amalgamate}</p><p>Fused from two thralls. Large size with 10-foot reach, 25-foot Speed, and a +1 status bonus to Strike damage.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": null,
+      "value": -1,
+      "unit": "unlimited"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "CreatureSize",
+        "value": "lg"
+      },
+      {
+        "key": "BaseSpeed",
+        "selector": "land",
+        "value": 25
+      },
+      {
+        "key": "FlatModifier",
+        "selector": "strike-damage",
+        "value": 1,
+        "type": "status",
+        "label": "Amalgamation Status Damage"
+      },
+      {
+        "key": "AdjustStrike",
+        "mode": "upgrade",
+        "property": "weapon-traits",
+        "value": "reach"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroAmalgamatn0"
+}

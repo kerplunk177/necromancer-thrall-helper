@@ -1,6 +1,7 @@
 import { executeSpawn } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { getOrImportActor, applyCustomVisuals, createRangeIndicator, attachGhostHUD } from "./spell-helpers.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export function bindConglomerateButton(deck, html) {
     const conjureConglomBtn = html.querySelector(".conjure-conglom-btn");
@@ -96,7 +97,7 @@ export function bindConglomerateButton(deck, html) {
             await applyCustomVisuals(finalPayload, actor, "conglom");
 
             executeSpawn(finalPayload).then(() => {
-                ChatMessage.create({
+                createNecroCard({
                     speaker: ChatMessage.getSpeaker({ actor }),
                     flavor: `<strong>Conglomerate of Limbs</strong>`,
                     content: `<p><b>${actor.name}</b> conjures a hulking mass of severed limbs to the battlefield!</p>`

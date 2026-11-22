@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { getSpellDC, ensureNecroSpell } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeNecroticBomb({ actor, tokenDoc }) {
     const necroLevel = actor.level || 1;
@@ -32,7 +33,7 @@ export async function executeNecroticBomb({ actor, tokenDoc }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Necrotic Bomb",
         content: `<p>Detonate <b>${tokenDoc.name}</b> for <b>${bombRank}d12</b> damage in a 10-foot emanation?</p>`,
         buttons: {
@@ -82,5 +83,5 @@ export async function executeNecroticBomb({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "explode"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

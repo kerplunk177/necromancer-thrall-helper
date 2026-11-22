@@ -1,6 +1,9 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getTokenDistance } from "./spell-helpers.js";
+import { getNecroEffect } from "../system/effect-catalog.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export async function executeMuscleBarrier({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -36,7 +39,7 @@ export async function executeMuscleBarrier({ actor, tokenDoc }) {
     const spellRank = Math.max(1, Math.ceil((actor.level || 1) / 2));
     const tempHP = spellRank * 10;
 
-    new Dialog({
+    new NecroDialog({
         title: "Muscle Barrier",
         content: `<p>Flay <b>${tokenDoc.name}</b> and wrap its muscle mass around <b>${targetDoc.name}</b>, granting <b>${tempHP} Temp HP</b> and a +1 status bonus to Athletics?</p>`,
         buttons: {
@@ -47,24 +50,11 @@ export async function executeMuscleBarrier({ actor, tokenDoc }) {
                     const focusToSpend = actor.system?.resources?.focus?.value || 0;
                     if (focusToSpend > 0) await actor.update({ "system.resources.focus.value": focusToSpend - 1 });
 
-                    const effectData = {
-                        name: "Effect: Muscle Barrier",
-                        type: "effect",
-                        img: "icons/magic/defensive/shield-barrier-flaming-pentagon-purple-orange.webp",
-                        system: {
-                            duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                            description: { value: `Grants ${tempHP} temporary Hit Points and a +1 status bonus to Athletics checks. The spell ends when all temporary Hit Points are gone.` },
-                            rules: [
-                                { key: "TempHP", value: tempHP },
-                                { key: "FlatModifier", selector: "athletics", value: 1, type: "status" }
-                            ]
-                        }
-                    };
-
+                    const effectData = await getNecroEffect("muscleBarrier", {}, { spellRank, tempHP });
                     await targetActor.createEmbeddedDocuments("Item", [effectData]);
                     await executeDelete(tokenDoc.id);
 
-                    await ChatMessage.create({
+                    await createNecroCard({
                         speaker: ChatMessage.getSpeaker({ actor }),
                         flavor: `<strong>Muscle Barrier</strong>`,
                         content: `<p><b>${actor.name}</b> splits <b>${tokenDoc.name}</b> apart, flinging the thick slabs of animated muscle onto <b>${targetDoc.name}</b>! They gain <b>${tempHP} Temp HP</b> and a +1 status bonus to Athletics.</p>`
@@ -74,5 +64,5 @@ export async function executeMuscleBarrier({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "cast"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

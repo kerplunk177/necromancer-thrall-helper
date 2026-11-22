@@ -1,3 +1,5 @@
-2026/11/14-14:11:29.071 5f08 Recovering log #10
-2026/11/14-14:11:29.074 5f08 Delete type=0 #10
-2026/11/14-14:11:29.075 5f08 Delete type=3 #8
+2026/11/21-21:54:16.305126 782fe4dfd6c0 Delete type=3 #1
+2026/11/21-21:54:16.314051 782fb37fe6c0 Level-0 table #5: started
+2026/11/21-21:54:16.318814 782fb37fe6c0 Level-0 table #5: 6065 bytes OK
+2026/11/21-21:54:16.325142 782fb37fe6c0 Delete type=0 #3
+2026/11/21-21:54:16.325267 782fb37fe6c0 Manual compaction at level-0 from '!items!necroAmalgamatn0' @ 72057594037927935 : 1 .. '!items!necroUnholyDead0' @ 0 : 0; will stop at (end)

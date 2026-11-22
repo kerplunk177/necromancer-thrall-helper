@@ -1,0 +1,51 @@
+{
+  "_id": "necroCollatReinf",
+  "name": "Collateral Reinforcement",
+  "type": "effect",
+  "img": "icons/magic/defensive/shield-hex-gold.webp",
+  "system": {
+    "slug": "collateral-reinforcement",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.JBfJSrPlfH4Dwp6k]{Collateral Reinforcement}</p><p>Immune to area and splash damage.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "rounds"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "Immunity",
+        "type": "area-damage"
+      },
+      {
+        "key": "Immunity",
+        "type": "area"
+      },
+      {
+        "key": "Immunity",
+        "type": "splash"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroCollatReinf"
+}

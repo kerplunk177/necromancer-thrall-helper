@@ -1,0 +1,47 @@
+{
+  "_id": "necroSongInstrmt",
+  "name": "Effect: Song Instrument",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/spirit-song.webp",
+  "system": {
+    "slug": "song-instrument",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.oRKmyZPwGafCaFT2]{Song of the Soul}</p><p>Playing the Song of the Soul.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "Aura",
+        "radius": 15,
+        "colors": {
+          "border": "#00ffff",
+          "fill": "#00ffff"
+        }
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroSongInstrmt"
+}

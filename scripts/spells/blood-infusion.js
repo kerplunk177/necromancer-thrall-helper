@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeBloodInfusion({ actor, tokenDoc }) {
     const spellRank = Math.ceil((actor.level || 1) / 2);
@@ -8,7 +9,7 @@ export async function executeBloodInfusion({ actor, tokenDoc }) {
 
     const infusionSpell = await ensureNecroSpell(actor, {
         name: "Blood Infusion",
-        img: "icons/magic/water/blood-drop-skull.webp",
+        img: "icons/skills/wounds/blood-cells-vessel-red.webp",
         systemData: {
             level: { value: spellRank },
             traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
@@ -33,7 +34,7 @@ export async function executeBloodInfusion({ actor, tokenDoc }) {
 
     const targetToken = validTargets[0];
 
-    new Dialog({
+    new NecroDialog({
         title: "Blood Infusion",
         content: `<p>Infuse blood through <b>${tokenDoc.name}</b> into <b>${targetToken.name}</b>?</p>`,
         buttons: {
@@ -62,5 +63,5 @@ export async function executeBloodInfusion({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "infuse"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

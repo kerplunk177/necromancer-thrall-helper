@@ -1,0 +1,57 @@
+{
+  "_id": "necroUnholyDead0",
+  "name": "The Unholy Dead",
+  "type": "effect",
+  "img": "icons/magic/symbols/rune-sigil-horned-white-purple.webp",
+  "system": {
+    "slug": "the-unholy-dead-effect",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.RILJjpTU4WKK6wVk]{The Unholy Dead}</p><p>Thrall gains the unholy trait. Strikes deal +1 spirit damage and gain the unholy trait.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": null,
+      "value": -1,
+      "unit": "unlimited"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "RollOption",
+        "domain": "all",
+        "option": "trait:unholy"
+      },
+      {
+        "key": "FlatModifier",
+        "selector": "strike-damage",
+        "value": 1,
+        "damageType": "spirit",
+        "type": "untyped"
+      },
+      {
+        "key": "AdjustStrike",
+        "mode": "add",
+        "property": "weapon-traits",
+        "value": "unholy"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroUnholyDead0"
+}

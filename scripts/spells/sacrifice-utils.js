@@ -1,30 +1,20 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getTokenDistance, getActorThrallTokens } from "./spell-helpers.js";
+import { getNecroEffect, findNecroEffect } from "../system/effect-catalog.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 async function applyBodyShieldSacrifice(actor, tokenDoc) {
     const necroLevel = actor.level || 1;
     const currentAC = actor.system?.attributes?.ac?.value || 10;
     const boostedAC = currentAC + 2;
 
-    await actor.createEmbeddedDocuments("Item", [{
-        name: "Effect: Body Shield",
-        type: "effect",
-        img: "icons/magic/defensive/shield-barrier-glowing-triangle-magenta.webp",
-        system: {
-            level: { value: necroLevel },
-            duration: { value: 1, unit: "rounds", expiry: "turn-start" },
-            description: { value: "You threw a thrall in the way! +2 circumstance bonus to AC, and resistance to all damage equal to your level against the triggering attack." },
-            rules: [
-                { key: "FlatModifier", selector: "ac", value: 2, type: "circumstance" },
-                { key: "Resistance", type: "all-damage", value: necroLevel }
-            ]
-        }
-    }]);
+    await actor.createEmbeddedDocuments("Item", [await getNecroEffect("bodyShield", {}, { necroLevel })]);
 
     await executeDelete(tokenDoc.id);
 
-    await ChatMessage.create({
+    await createNecroCard({
         speaker: ChatMessage.getSpeaker({ actor }),
         flavor: `<strong>Body Shield Reaction!</strong>`,
         content: `
@@ -54,7 +44,7 @@ export async function executeConsumeThrall({ actor, tokenDoc }) {
         return notify("warn", "That thrall is beyond 30 feet.");
     }
 
-    new Dialog({
+    new NecroDialog({
         title: "Consume Thrall",
         content: `<p>Destroy <b>${tokenDoc.name}</b> to regain 1 Focus Point?</p>`,
         buttons: {
@@ -67,7 +57,7 @@ export async function executeConsumeThrall({ actor, tokenDoc }) {
                     const currentFocus = actor.system?.resources?.focus?.value || 0;
                     await actor.update({ "system.resources.focus.value": currentFocus + 1 });
 
-                    await ChatMessage.create({
+                    await createNecroCard({
                         speaker: ChatMessage.getSpeaker({ actor }),
                         flavor: `<strong>Consume Thrall</strong>`,
                         content: `<p><b>${actor.name}</b> consumes the animus of <b>${tokenDoc.name}</b>, regaining 1 Focus Point (restricted to grave spells).</p>`
@@ -77,7 +67,7 @@ export async function executeConsumeThrall({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "consume"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }
 
 export function bindHeaderUtilityButtons(deck, html) {
@@ -89,21 +79,12 @@ export function bindHeaderUtilityButtons(deck, html) {
             const actor = game.actors.get(deck.necroId) || game.user.character;
             if (!actor) return;
 
-            const existing = actor.items.find(i => i.type === "effect" && i.name === "Effect: Hallowed Earth");
+            const existing = findNecroEffect(actor, "hallowedEarth");
             if (existing) {
                 await existing.delete();
                 notify("info", "Hallowed Earth dismissed.");
             } else {
-                await actor.createEmbeddedDocuments("Item", [{
-                    name: "Effect: Hallowed Earth",
-                    type: "effect",
-                    img: "icons/magic/light/explosion-star-glow-yellow.webp",
-                    system: {
-                        duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                        description: { value: "Aura of holy vitality." },
-                        rules: [{ key: "Aura", radius: 10, colors: { border: "#ffd700", fill: "#ffd700" } }]
-                    }
-                }]);
+                await actor.createEmbeddedDocuments("Item", [await getNecroEffect("hallowedEarth")]);
                 notify("info", "Hallowed Earth activated.");
             }
             deck.render({ force: false });
@@ -118,21 +99,12 @@ export function bindHeaderUtilityButtons(deck, html) {
             const actor = game.actors.get(deck.necroId) || game.user.character;
             if (!actor) return;
 
-            const existing = actor.items.find(i => i.type === "effect" && i.name === "Effect: Corrupted Ground");
+            const existing = findNecroEffect(actor, "corruptedGround");
             if (existing) {
                 await existing.delete();
                 notify("info", "Corrupted Ground dismissed.");
             } else {
-                await actor.createEmbeddedDocuments("Item", [{
-                    name: "Effect: Corrupted Ground",
-                    type: "effect",
-                    img: "icons/magic/death/skull-horned-horns-purple.webp",
-                    system: {
-                        duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                        description: { value: "Aura of unholy void." },
-                        rules: [{ key: "Aura", radius: 10, colors: { border: "#8a2be2", fill: "#8a2be2" } }]
-                    }
-                }]);
+                await actor.createEmbeddedDocuments("Item", [await getNecroEffect("corruptedGround")]);
                 notify("info", "Corrupted Ground activated.");
             }
             deck.render({ force: false });
@@ -157,7 +129,7 @@ export function bindHeaderUtilityButtons(deck, html) {
 
             const optionsHtml = eligibleThralls.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
 
-            new Dialog({
+            new NecroDialog({
                 title: "Body Shield Reaction",
                 content: `<p>Select an adjacent thrall to throw into the attack's path:</p><form><div class="form-group"><select id="shield-thrall">${optionsHtml}</select></div></form>`,
                 buttons: {
@@ -204,7 +176,7 @@ export function bindHeaderUtilityButtons(deck, html) {
                 </div>
             `).join("");
 
-            new Dialog({
+            new NecroDialog({
                 title: "Reclaim Power",
                 content: `<form id="reclaim-form" style="margin-bottom: 10px;"><p>Select up to 3 thralls to destroy and siphon their essence (within 60 feet).</p><div style="max-height: 200px; overflow-y: auto; border: 1px solid #333; padding: 5px; background: rgba(0,0,0,0.2); border-radius: 4px;">${checkboxes}</div></form>`,
                 buttons: {
@@ -260,7 +232,7 @@ export function bindHeaderUtilityButtons(deck, html) {
                                 if (activeConditions.length > 0) {
                                     const condOptions = activeConditions.map(c => `<option value="${c.system.slug}">${c.name}</option>`).join("");
                                     await new Promise(resolve => {
-                                        new Dialog({
+                                        new NecroDialog({
                                             title: "Reduce Condition",
                                             content: `<p>You destroyed 3 thralls! Select a condition to decrease by 1:</p><form><select id="cond-select">${condOptions}</select></form>`,
                                             buttons: {
@@ -281,7 +253,7 @@ export function bindHeaderUtilityButtons(deck, html) {
                                 }
                             }
 
-                            await ChatMessage.create({
+                            await createNecroCard({
                                 speaker: ChatMessage.getSpeaker({ actor }),
                                 flavor: `<strong>Reclaim Power</strong>`,
                                 content: chatContent
@@ -299,7 +271,7 @@ export function bindHeaderUtilityButtons(deck, html) {
                         }
                     });
                 }
-            }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+            }).render(true);
         });
     }
 
@@ -314,26 +286,13 @@ export function bindHeaderUtilityButtons(deck, html) {
             const thrallTokens = getActorThrallTokens(actor, { includeReanimated: true });
             if (thrallTokens.length === 0) return notify("warn", "No thralls on the battlefield to reinforce.");
 
-            const effectData = {
-                name: "Collateral Reinforcement",
-                type: "effect",
-                img: "icons/magic/defensive/shield-barrier-flaming-pentagon-purple-orange.webp",
-                system: {
-                    duration: { value: 1, unit: "rounds", expiry: "turn-start" },
-                    description: { value: "Immune to area and splash damage." },
-                    rules: [
-                        { key: "Immunity", type: "area-damage" },
-                        { key: "Immunity", type: "area" },
-                        { key: "Immunity", type: "splash" }
-                    ]
-                }
-            };
+            const effectData = await getNecroEffect("collateralReinforcement");
 
             for (const tDoc of thrallTokens) {
                 if (tDoc.actor) await tDoc.actor.createEmbeddedDocuments("Item", [effectData]);
             }
 
-            await ChatMessage.create({
+            await createNecroCard({
                 speaker: ChatMessage.getSpeaker({ actor }),
                 flavor: `<strong>Collateral Reinforcement</strong>`,
                 content: `<p><b>${actor.name}</b> thickens the bone and flesh of their minions! All active thralls are immune to area and splash damage for 1 round.</p>`

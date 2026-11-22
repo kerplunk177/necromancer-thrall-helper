@@ -1,5 +1,7 @@
 import { notify } from "../system/notify.js";
 import { getTokenDistance } from "./spell-helpers.js";
+import { getNecroEffect } from "../system/effect-catalog.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeSongOfTheSoul({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -31,7 +33,7 @@ export async function executeSongOfTheSoul({ actor, tokenDoc }) {
         } else {
             const optionsHtml = eligibleAllies.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
             const chosenId = await new Promise(resolve => {
-                new Dialog({
+                new NecroDialog({
                     title: "Song of the Soul Target",
                     content: `<p>Multiple allies are within 15 feet of the instrument thrall. Who hears the song?</p><form><select id="song-recipient">${optionsHtml}</select></form>`,
                     buttons: {
@@ -69,7 +71,7 @@ export async function executeSongOfTheSoul({ actor, tokenDoc }) {
     const spellRank = Math.max(1, Math.ceil((actor.level || 1) / 2));
     const spellTrait = isUndead ? "Void" : "Vitality";
 
-    new Dialog({
+    new NecroDialog({
         title: "Song of the Soul",
         content: `<p>Shape <b>${tokenDoc.name}</b> into a macabre instrument, restoring <b>${spellRank}d8 Hit Points</b> to <b>${targetDoc.name}</b> and granting Fast Healing ${spellRank} while in range?</p>`,
         buttons: {
@@ -95,40 +97,17 @@ export async function executeSongOfTheSoul({ actor, tokenDoc }) {
                         await targetActor.update({ "system.attributes.hp.value": Math.min(maxHP, currentHP + actualHeal) });
                     }
 
-                    const thrallEffect = {
-                        name: "Effect: Song Instrument",
-                        type: "effect",
-                        img: "icons/skills/music/instrument-harp-harpist-blue.webp",
-                        system: {
-                            duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                            description: { value: `Playing the Song of the Soul for ${targetDoc.name}.` },
-                            rules: [{ key: "Aura", radius: 15, colors: { border: "#00ffff", fill: "#00ffff" } }]
-                        }
-                    };
+                    const thrallEffect = await getNecroEffect("songInstrument", {}, { targetName: targetDoc.name });
                     await tokenDoc.actor.createEmbeddedDocuments("Item", [thrallEffect]);
 
-                    const recipientEffect = {
-                        name: "Effect: Song of the Soul (Recipient)",
-                        type: "effect",
-                        img: "icons/magic/life/heart-cross-blue.webp",
-                        system: {
-                            duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                            description: { value: `Gains Fast Healing ${spellRank} as long as you are within 15 feet of the instrument thrall.` },
-                            rules: [{ key: "FastHealing", value: spellRank, type: "fast-healing" }]
-                        },
-                        flags: {
-                            "necromancer-thrall-helper": {
-                                instrumentId: tokenDoc.id,
-                                spellRank: spellRank,
-                                isUndead: isUndead
-                            }
-                        }
-                    };
+                    const recipientEffect = await getNecroEffect("songRecipient", {
+                        flags: { "necromancer-thrall-helper": { instrumentId: tokenDoc.id, spellRank: spellRank, isUndead: isUndead } }
+                    }, { spellRank });
                     await targetActor.createEmbeddedDocuments("Item", [recipientEffect]);
                 }
             },
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "cast"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

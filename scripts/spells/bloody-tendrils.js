@@ -1,7 +1,7 @@
 import { createSpawnBatch } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { buildTendrilEffect, noteZoneVisibility, getZoneConfig } from "../system/tendril-zone.js";
-import { getSpellDC, getOrImportActor, applyCustomVisuals, createRangeIndicator, attachGhostHUD } from "./spell-helpers.js";
+import { getSpellDC, getOrImportActor, applyCustomVisuals, createRangeIndicator, attachGhostHUD, buildNecroSpellData } from "./spell-helpers.js";
 
 export function bindBloodyTendrilsButton(deck, html) {
     const conjureBtn = html.querySelector(".conjure-tendrils-btn");
@@ -37,7 +37,7 @@ export function bindBloodyTendrilsButton(deck, html) {
         };
 
         if (!tendrilsSpell) {
-            const created = await actor.createEmbeddedDocuments("Item", [{ name: "Bloody Tendrils", type: "spell", img: "icons/skills/wounds/blood-spurt-spray-red.webp", system: spellSystemData }]);
+            const created = await actor.createEmbeddedDocuments("Item", [await buildNecroSpellData("Bloody Tendrils", "icons/skills/wounds/blood-spurt-spray-red.webp", spellSystemData)]);
             tendrilsSpell = created[0];
         } else {
             await tendrilsSpell.update({ system: spellSystemData });

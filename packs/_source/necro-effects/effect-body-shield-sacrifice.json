@@ -1,0 +1,50 @@
+{
+  "_id": "necroBodyShield0",
+  "name": "Effect: Body Shield",
+  "type": "effect",
+  "img": "icons/magic/death/undead-skeleton-deformed-red.webp",
+  "system": {
+    "slug": "effect-body-shield-sacrifice",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.XnFSS0nBcEMPA8oZ]{Body Shield}</p><p>You threw a thrall in the way! +2 circumstance bonus to AC, and resistance to all damage equal to your level against the triggering attack.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "rounds"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "FlatModifier",
+        "selector": "ac",
+        "value": 2,
+        "type": "circumstance"
+      },
+      {
+        "key": "Resistance",
+        "type": "all-damage",
+        "value": 1
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroBodyShield0"
+}

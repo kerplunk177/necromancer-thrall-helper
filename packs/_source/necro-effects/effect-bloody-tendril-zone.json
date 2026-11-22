@@ -6,7 +6,7 @@
   "system": {
     "slug": "bloody-tendril-zone",
     "description": {
-      "value": "<p>Creatures that end their turn in this aura must attempt the Bloody Tendrils save.</p>"
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.qy5NVKy2A3LwNleW]{Bloody Tendrils}</p><p>Creatures that end their turn in this aura must attempt the Bloody Tendrils save.</p>"
     },
     "duration": {
       "value": -1,

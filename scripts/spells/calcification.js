@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeCalcification({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -40,7 +41,7 @@ export async function executeCalcification({ actor, tokenDoc }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Calcification",
         content: `<p>Destroy <b>${tokenDoc.name}</b> to turn it into a cloud of bone dust that calcifies <b>${targetToken.name}</b>?</p>`,
         buttons: {
@@ -73,5 +74,5 @@ export async function executeCalcification({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "cast"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

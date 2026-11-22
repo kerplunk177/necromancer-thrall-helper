@@ -2,17 +2,17 @@
   "_id": "necroBoneFascin0",
   "name": "Effect: Bone Fascination",
   "type": "effect",
-  "img": "icons/equipment/feet/boots-collared-green.webp",
+  "img": "icons/magic/death/skull-pile-glowing-pink.webp",
   "system": {
     "slug": "bone-fascination",
     "description": {
-      "value": "<p>Your thralls are well constructed and nimble. They gain a +5 foot bonus to Speed.</p>"
+      "value": "<p>Granted by @UUID[Compendium.pf2e.classfeatures.Item.PGUiN4995rreH3aU]{Grim Fascination}</p><p>Your thralls are well constructed and nimble. They gain a +5 foot bonus to Speed.</p>"
     },
     "duration": {
-      "value": -1,
-      "unit": "unlimited",
       "sustained": false,
-      "expiry": null
+      "expiry": null,
+      "value": -1,
+      "unit": "unlimited"
     },
     "tokenIcon": {
       "show": true
@@ -39,7 +39,7 @@
   "_stats": {
     "coreVersion": "14",
     "systemId": "pf2e",
-    "systemVersion": "8.7.0"
+    "systemVersion": "8.7.1"
   },
   "_key": "!items!necroBoneFascin0"
 }

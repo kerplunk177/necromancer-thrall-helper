@@ -1,0 +1,38 @@
+{
+  "_id": "necroLivGravLogc",
+  "name": "Living Graveyard Logic",
+  "type": "effect",
+  "img": "icons/magic/death/undead-zombie-grave-green.webp",
+  "system": {
+    "slug": "living-graveyard-logic",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.iCzdCea2tm1oVpRf]{Living Graveyard}</p><p>Marks a living graveyard so the module can track it.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroLivGravLogc"
+}

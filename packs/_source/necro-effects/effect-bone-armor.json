@@ -1,0 +1,45 @@
+{
+  "_id": "necroBoneArmor00",
+  "name": "Effect: Bone Armor",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/armor-of-bones.webp",
+  "system": {
+    "slug": "effect-bone-armor",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.yfaTZv8nCsS4GtrA]{Bony Barrage}</p><p>A +1 status bonus to AC.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "rounds"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "FlatModifier",
+        "selector": "ac",
+        "value": 1,
+        "type": "status"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroBoneArmor00"
+}

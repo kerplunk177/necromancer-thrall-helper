@@ -2,6 +2,40 @@ import { artKind, BUNDLED_THRALL } from "../system/thrall-manager.js";
 import { notify } from "../system/notify.js";
 import { getZoneConfig, describeDramatisStyle } from "../system/tendril-zone.js";
 import { ownerColor, syncAllParticleColors, EFFECT_COLOR_KEYS } from "../system/effect-colors.js";
+import { NecroDialog } from "./necro-dialog.js";
+
+const SPELLCASTING_PROBLEMS = {
+    noFocusEntry: "There is no <b>Focus</b> spellcasting entry on this character.",
+    noFocusSpells: "The Focus spellcasting entry has no spells assigned to it.",
+    noFocusPool: "The Focus Pool maximum is 0."
+};
+
+/**
+ * Non-blocking reminder shown when the deck opens for a Necromancer whose sheet is missing the
+ * Focus spellcasting setup. The "don't show again" checkbox is stored as an actor flag.
+ */
+export function openSpellcastingCheckDialog(actor, problems) {
+    if (!actor || !problems?.length) return;
+    const list = problems.map(p => `<li>${SPELLCASTING_PROBLEMS[p] ?? p}</li>`).join("");
+    new NecroDialog({
+        title: "Command Deck: Spellcasting Check",
+        content: `
+            <p><b>${foundry.utils.escapeHTML(actor.name)}</b> isn't set up for the grave spells yet, so the deck can't show Focus Points or spell buttons:</p>
+            <ul>${list}</ul>
+            <p>To fix it, open the Spellcasting tab, add a <b>Focus</b> spellcasting entry (your necromancer's tradition),
+            drag the focus and grave spells into it, and set the Focus Pool maximum.</p>
+            <div class="form-group">
+                <label><input type="checkbox" name="suppress"> Don't show again for this character</label>
+            </div>`,
+        buttons: { ok: { icon: '<i class="fas fa-check"></i>', label: "Understood" } },
+        default: "ok",
+        close: (dialogHtml) => {
+            if (dialogHtml.find('input[name="suppress"]').prop("checked")) {
+                actor.setFlag("necromancer-thrall-helper", "suppressSpellcastingCheck", true).catch(err => console.error(err));
+            }
+        }
+    }).render(true);
+}
 
 /**
  * Open the "Default Thrall Look" configuration dialog for all summon types.
@@ -135,7 +169,7 @@ export function openDefaultLookDialog(actor) {
         </form>
     `;
 
-    new Dialog({
+    new NecroDialog({
         title: "Default Thrall Look",
         content: formHtml,
         render: (dialogHtml) => {
@@ -295,7 +329,7 @@ export function openNecroSettingsDialog(actor) {
     const levelOptions = Object.entries(game.settings.settings.get("necromancer-thrall-helper.notificationLevel").choices)
         .map(([v, l]) => `<option value="${v}" ${v === level ? "selected" : ""}>${l}</option>`).join("");
 
-    new Dialog({
+    new NecroDialog({
         title: "Necromancer Settings",
         content: `
             <form autocomplete="off" class="necro-settings-form">

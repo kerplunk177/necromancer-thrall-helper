@@ -1,8 +1,12 @@
+import { DMG_COLORS } from "../system/dmg-palette.js";
 import { getGrantedSlugs, resolveImageSet, applyRingArt, tokenPortrait } from "../system/thrall-manager.js";
 import { notify, notifyForce } from "../system/notify.js";
 import { effectColorNum } from "../system/effect-colors.js";
+import { executeDeleteBatch } from "../system/socket.js";
+import { isNecroEffect } from "../system/effect-catalog.js";
+import { createNecroCard } from "../system/necro-card.js";
 
-export const THRALL_DMG_COLORS = { spirit: "#0ea5e9", void: "#7e22ce", vitality: "#b58900" };
+export const THRALL_DMG_COLORS = { spirit: DMG_COLORS.spirit, void: DMG_COLORS.void, vitality: DMG_COLORS.vitality };
 
 /**
  * Update a document only if it still exists; ignores "does not exist" race conditions.
@@ -91,6 +95,26 @@ export function hasConjurerOfCorpses(actor) {
         ["spell", "feat", "action"].includes(i.type) &&
         (i.name.toLowerCase().includes("conjurer of corpses") || i.system?.slug?.includes("conjurer-of-corpses"))
     ) || false;
+}
+
+/**
+ * Check that the Necromancer's sheet is set up for the deck: a Focus spellcasting entry, spells
+ * in it, and a Focus Pool. Returns a list of problem codes, worst first (empty when all is well).
+ */
+export function checkNecroSpellcasting(actor) {
+    if (!actor) return [];
+    const entries = actor.items.filter(i => i.type === "spellcastingEntry");
+    const focusEntries = entries.filter(e => e.isFocusPool === true || e.system?.prepared?.value === "focus");
+    const problems = [];
+    if (!focusEntries.length) {
+        problems.push("noFocusEntry");
+    } else {
+        const ids = new Set(focusEntries.map(e => e.id));
+        const hasSpells = actor.items.some(i => i.type === "spell" && ids.has(i.system?.location?.value));
+        if (!hasSpells) problems.push("noFocusSpells");
+    }
+    if (!(actor.system?.resources?.focus?.max > 0)) problems.push("noFocusPool");
+    return problems;
 }
 
 /**
@@ -292,13 +316,75 @@ export function createRangeIndicator(actor, rangeFeet, fillAlpha = 0.05) {
     return { necroCenter, rangeIndicator };
 }
 
+const SPELL_PACK = "pf2e.spells-srd";
+/** Official PF2e spells by the name the module uses: [pack item id, slug]. Bone Burst is a feat, so it has none. */
+const OFFICIAL_SPELLS = {
+    "Bone Spear": ["4JXxqBXigKECcpTm", "bone-spear"],
+    "Dead Weight": ["4kQMFyRKj5Gv13zl", "dead-weight"],
+    "Blood Infusion": ["tFWa3ouvMC5Zz3P0", "blood-infusion"],
+    "Flesh Tsunami": ["jtACJQc6n9ZaG9kA", "flesh-tsunami"],
+    "Temporary Possession": ["yZpWaJzm7kUjKvlQ", "temporary-possession"],
+    "Calcification": ["L13n9NKvfGLApse1", "calcification"],
+    "Deathly Scream": ["aIPa7Yp4vGeKIKNG", "deathly-scream"],
+    "Necrotic Bomb": ["cg1l2AxBenLU6JFE", "necrotic-bomb"],
+    "Life Tap": ["fgmxDC2PH2TEYGKG", "life-tap"],
+    "Bony Barrage": ["yfaTZv8nCsS4GtrA", "bony-barrage"],
+    "Dread Mosquito Storm": ["Q6cvsLytYffpeN3g", "dread-mosquito-storm"],
+    "Zombie Horde": ["ziujByCygD3MO2CK", "zombie-horde"],
+    "Bloody Tendrils": ["qy5NVKy2A3LwNleW", "bloody-tendrils"],
+    "Recurring Nightmare": ["ecXhGEAX3PYd6FqK", "recurring-nightmare"]
+};
+const officialSpellCache = new Map();
+
+/**
+ * The official PF2e spell as plain item data: looked up by UUID, then by slug (so renames and
+ * translated names don't break it). Null when it can't be found.
+ */
+export async function getOfficialSpellData(name) {
+    const ref = OFFICIAL_SPELLS[name];
+    if (!ref) return null;
+    if (!officialSpellCache.has(name)) {
+        officialSpellCache.set(name, (async () => {
+            const [id, slug] = ref;
+            try {
+                let doc = await fromUuid(`Compendium.${SPELL_PACK}.Item.${id}`);
+                if (!doc) {
+                    const pack = game.packs.get(SPELL_PACK);
+                    const entry = (await pack?.getIndex({ fields: ["system.slug"] }))?.find(e => e.system?.slug === slug);
+                    doc = entry ? await pack.getDocument(entry._id) : null;
+                }
+                if (!doc || doc.type !== "spell") return null;
+                const data = doc.toObject();
+                for (const k of ["_id", "folder", "ownership", "_stats", "sort"]) delete data[k];
+                data._stats = { compendiumSource: doc.uuid };
+                return data;
+            } catch { return null; }
+        })());
+    }
+    const data = await officialSpellCache.get(name);
+    return data ? foundry.utils.deepClone(data) : null;
+}
+
+/**
+ * Item data for a spell the module adds to an actor: a copy of the official PF2e spell (art, traits,
+ * text) with the module's rank, DC and damage applied; an inline stand-in when it can't be found.
+ */
+export async function buildNecroSpellData(name, img, systemData) {
+    const official = await getOfficialSpellData(name);
+    if (!official) return { name, type: "spell", img, system: systemData };
+    for (const key of ["level", "defense", "damage"]) {
+        if (systemData[key] !== undefined) official.system[key] = foundry.utils.deepClone(systemData[key]);
+    }
+    return official;
+}
+
 /**
  * Find or create a Necromancer spell on the actor and apply system data + AoE Easy Resolve flags.
  */
 export async function ensureNecroSpell(actor, { name, img, systemData, aoeFlags = {}, necroFlags = {}, extraUpdates = {} }) {
     let spell = actor.items.find(i => ["spell", "feat", "action"].includes(i.type) && i.name === name);
     if (!spell) {
-        const created = await actor.createEmbeddedDocuments("Item", [{ name, type: "spell", img, system: systemData }]);
+        const created = await actor.createEmbeddedDocuments("Item", [await buildNecroSpellData(name, img, systemData)]);
         spell = created[0];
     } else {
         await spell.update({ system: systemData, ...extraUpdates });
@@ -374,7 +460,7 @@ export async function postManualSaveCard({
         }
     };
     if (flavor) msgData.flavor = flavor;
-    return await ChatMessage.create(msgData);
+    return await createNecroCard(msgData);
 }
 
 // Register global graphics helpers on globalThis.NecroThrallHelper
@@ -420,25 +506,9 @@ globalThis.NecroThrallHelper.spawnOriginMarker = async (sceneId, drawingData, du
 export async function dismissAllThrallsForActor(actor) {
     if (!actor || !canvas.scene) return 0;
 
-    if (game.user.isGM) {
-        for (const combat of game.combats) {
-            const badIds = combat.combatants.filter(c => {
-                if (!c.actor || !c.token || !canvas.scene?.tokens.get(c.tokenId)) return true;
-                if (c.token.getFlag("necromancer-thrall-helper", "masterId") === actor.id) return true;
-                return false;
-            }).map(c => c.id);
-            if (badIds.length > 0) await combat.deleteEmbeddedDocuments("Combatant", badIds);
-        }
-    }
-
-    const thrallIds = canvas.scene.tokens
-        .filter(t => t.getFlag("necromancer-thrall-helper", "masterId") === actor.id)
-        .map(t => t.id);
-
-    for (const id of thrallIds) {
-        await executeDelete(id);
-    }
-    return thrallIds.length;
+    // Same set the deck lists, plus reanimated foes (they carry masterId too).
+    const thrallIds = getActorThrallTokens(actor, { includeReanimated: true }).map(t => t.id);
+    return await executeDeleteBatch(thrallIds, canvas.scene.id);
 }
 
 /**
@@ -480,8 +550,8 @@ export async function dismissAllEffectsForActor(actor) {
         const effectIdsToRemove = actor.items.filter(i =>
             i.type === "effect" && (
                 i.getFlag("necromancer-thrall-helper", "isHazardTracker") ||
-                i.name === "Effect: Hallowed Earth" ||
-                i.name === "Effect: Corrupted Ground"
+                isNecroEffect(i, "hallowedEarth") ||
+                isNecroEffect(i, "corruptedGround")
             )
         ).map(i => i.id);
 

@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeBonyBarrage({ actor, tokenDoc, event }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -36,7 +37,7 @@ export async function executeBonyBarrage({ actor, tokenDoc, event }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Bony Barrage",
         content: `<p>Shatter <b>${tokenDoc.name}</b> into a 30-foot cone of jagged bone for <b>${damageDice}d10 piercing</b> damage?</p>`,
         buttons: {
@@ -85,5 +86,5 @@ export async function executeBonyBarrage({ actor, tokenDoc, event }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "fire"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

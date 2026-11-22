@@ -1,0 +1,662 @@
+[
+  {
+    "id": "necromancer-thrall-helper.necromancer",
+    "name": "Necromancer",
+    "appearance": {
+      "body": {
+        "type": "pearl",
+        "color": "#8786ab",
+        "color2": "#5d3e71",
+        "finish": "polished",
+        "roughness": 0.25,
+        "preset": null
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#3cf7cc",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "classic"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "stone",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.thralls",
+    "name": "Thralls",
+    "appearance": {
+      "body": {
+        "type": "gem",
+        "color": "#2d806d",
+        "color2": "#0a332a",
+        "finish": "polished",
+        "roughness": 0,
+        "preset": "quartz"
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#9b6bff",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1.3,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "classic"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "stone",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.necromancer-blood",
+    "name": "Necromancer (Blood)",
+    "appearance": {
+      "body": {
+        "type": "resin",
+        "color": "#5b23b3",
+        "color2": "#ff2a45",
+        "finish": "polished",
+        "roughness": 0.15,
+        "preset": null
+      },
+      "interior": {
+        "type": "swirl",
+        "colors": [
+          "#8a4dff",
+          "#9a2333"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "enamel",
+        "relief": "raised",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#ff2a45",
+        "contrast": false,
+        "inkGlow": 1,
+        "depth": 0.49,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1,
+        "weight": 0.4
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "stone",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.necromancer-bone",
+    "name": "Necromancer (Bone)",
+    "appearance": {
+      "body": {
+        "type": "marble",
+        "color": "#5b23b3",
+        "color2": "#d8d0bc",
+        "finish": "polished",
+        "roughness": 1,
+        "preset": null
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#efe6cf",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "wood",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.necromancer-flesh",
+    "name": "Necromancer (Flesh)",
+    "appearance": {
+      "body": {
+        "type": "stone",
+        "color": "#5b23b3",
+        "color2": "#f9b49f",
+        "finish": "polished",
+        "roughness": 0,
+        "preset": "sandstone"
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "enamel",
+        "relief": "raised",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#f0b09c",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "wood",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.necromancer-spirit",
+    "name": "Necromancer (Spirit)",
+    "appearance": {
+      "body": {
+        "type": "stone",
+        "color": "#5b23b3",
+        "color2": "#80eeff",
+        "finish": "polished",
+        "roughness": 0,
+        "preset": "sandstone"
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#80eeff",
+        "contrast": false,
+        "inkGlow": 1,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "stone",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.thralls-blood",
+    "name": "Thralls (Blood)",
+    "appearance": {
+      "body": {
+        "type": "marble",
+        "color": "#2c0c0c",
+        "color2": "#c4172e",
+        "finish": "polished",
+        "roughness": 0.1,
+        "preset": null
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#b0101f",
+          "#3d0410"
+        ],
+        "density": 0.8,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": true,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#5b23b3",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.49,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1.3,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "wood",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.thralls-bone",
+    "name": "Thralls (Bone)",
+    "appearance": {
+      "body": {
+        "type": "bone",
+        "color": "#d8d0bc",
+        "color2": "#8a8270",
+        "finish": "polished",
+        "roughness": 0.7,
+        "preset": "bone"
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#5b23b3",
+        "contrast": false,
+        "inkGlow": 1.75,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1.3,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "wood",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.thralls-flesh",
+    "name": "Thralls (Flesh)",
+    "appearance": {
+      "body": {
+        "type": "marble",
+        "color": "#d08a76",
+        "color2": "#6e1f24",
+        "finish": "polished",
+        "roughness": 0.3,
+        "preset": null
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#5b23b3",
+        "contrast": false,
+        "inkGlow": 1.8,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1.3,
+        "weight": 0.15
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "wood",
+    "rules": []
+  },
+  {
+    "id": "necromancer-thrall-helper.thralls-spirit",
+    "name": "Thralls (Spirit)",
+    "appearance": {
+      "body": {
+        "type": "iridescent",
+        "color": "#0b1a2a",
+        "color2": "#80eeff",
+        "finish": "polished",
+        "roughness": 0.05,
+        "preset": "dichroic"
+      },
+      "interior": {
+        "type": "none",
+        "colors": [
+          "#8a4dff",
+          "#22d3ee"
+        ],
+        "density": 0.6,
+        "shape": "star",
+        "inclusion": "flower",
+        "bubble": false,
+        "sand": false,
+        "motion": true,
+        "extra": "none",
+        "extraColor": "#ffffff",
+        "extraDensity": 0.5
+      },
+      "numbers": {
+        "fill": "glow",
+        "relief": "engraved",
+        "icons": {
+          "crit": "flame",
+          "fumble": "skull"
+        },
+        "color": "#5b23b3",
+        "contrast": false,
+        "inkGlow": 1.75,
+        "depth": 0.5,
+        "font": "norse",
+        "pips": false,
+        "coin": "sun-moon",
+        "size": 1.3,
+        "weight": 0.2
+      },
+      "edges": {
+        "radius": 0.25,
+        "style": "rounded",
+        "strip": {
+          "style": "body",
+          "color": "#e2b04a",
+          "strength": 1
+        }
+      },
+      "glow": {
+        "color": "#ffffff",
+        "intensity": 0
+      },
+      "shapes": {
+        "d4": "crystal"
+      }
+    },
+    "perType": {},
+    "soundMaterial": "stone",
+    "rules": []
+  }
+]

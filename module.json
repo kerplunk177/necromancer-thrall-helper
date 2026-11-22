@@ -29,6 +29,13 @@
         "reason": "Required for routing player spawn requests and GM macro executions."
       }
     ],
+    "recommends": [
+      {
+        "id": "dicer",
+        "type": "module",
+        "reason": "With Dicer 1.4 or later, necromancers and their thralls get their own dice themes."
+      }
+    ],
     "systems": [
       {
         "id": "pf2e",

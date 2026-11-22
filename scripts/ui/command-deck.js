@@ -2,8 +2,10 @@ import "../system/necro-hooks.js";
 import { getFatalMethodName, tokenPortrait } from "../system/thrall-manager.js";
 import { PortfolioEditor } from "./portfolio-editor.js";
 import { executeDelete } from "../system/socket.js";
-import { notify, notifyForce } from "../system/notify.js";
-import { openDefaultLookDialog, openNecroSettingsDialog } from "./deck-dialogs.js";
+import { notify, notifyForce, guardAction } from "../system/notify.js";
+import { userOwns } from "../system/necro-resolve.js";
+import { findNecroEffect } from "../system/effect-catalog.js";
+import { openDefaultLookDialog, openNecroSettingsDialog, openSpellcastingCheckDialog } from "./deck-dialogs.js";
 import { bindHeaderSpellButtons, THRALL_ACTIONS } from "../spells/index.js";
 import {
     THRALL_DMG_COLORS,
@@ -13,6 +15,7 @@ import {
     getFascinations,
     getTokenDistance,
     getActorThrallTokens,
+    checkNecroSpellcasting,
     dismissAllThrallsForActor,
     dismissAllEffectsForActor
 } from "../spells/spell-helpers.js";
@@ -25,6 +28,9 @@ export {
 };
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+
+// Thrall tokens with an action in flight. Stops double-clicks from running one action twice.
+const BUSY_THRALLS = new Set();
 
 export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2) {
     static DEFAULT_OPTIONS = {
@@ -46,51 +52,17 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             necroId = null;
         }
 
-        if (!necroId) {
-            const controlled = canvas.tokens?.controlled[0]?.actor;
-            if (controlled) {
-                necroId = controlled.id;
-            } else if (game.user.character) {
-                necroId = game.user.character.id;
-            } else if (canvas.scene) {
-                const existingThrall = canvas.scene.tokens.find(t => t.flags?.["necromancer-thrall-helper"]?.masterId);
-                if (existingThrall) necroId = existingThrall.flags["necromancer-thrall-helper"].masterId;
-            } else if (game.user.isGM) {
-                const necro = game.actors.find(a => a.flags?.["necromancer-thrall-helper"]?.familyTree);
-                if (necro) {
-                    necroId = necro.id;
-                    notify("info", `Auto-assigned Command Deck to ${necro.name}.`);
-                }
-            }
-        }
-
-        if (!necroId) {
-            notify("warn", "No Necromancer found. Please select your token before opening the Command Deck.");
-            throw new Error("Command Deck aborted: No valid Necromancer target.");
-        }
-
-        const actor = game.actors.get(necroId);
-        const requireNecro = game.settings.get("necromancer-thrall-helper", "requireNecromancer");
-
-        if (actor && requireNecro) {
-            const isAuthorized = actor.items.some(i => {
-                const name = i.name.toLowerCase();
-                const slug = i.system?.slug || "";
-                if (name.includes("necro") || slug.includes("necro") || name.includes("reanimator") || name.includes("undead master")) return true;
-                if (name.includes("conjurer of corpses") || i.flags?.["necromancer-thrall-helper"]) return true;
-                return false;
-            });
-
-            if (!isAuthorized && !game.user.isGM) {
-                notifyForce("warn", "This mortal lacks the dark blood and discipline required to command the dead.");
-                throw new Error("Unauthorized Command Deck access.");
-            }
+        // The caller resolves and authorizes the necromancer (see resolveNecromancer).
+        if (!necroId || !game.actors.get(necroId)) {
+            throw new Error("Command Deck aborted: no necromancer was resolved.");
         }
 
         const savedPos = localStorage.getItem(`necro-deck-bounds-${game.user?.id}`);
         if (savedPos) {
             try {
-                options.position = foundry.utils.mergeObject(options.position || {}, JSON.parse(savedPos));
+                // Height is never restored: the deck sizes itself to its thralls (see _onRender).
+                const { left, top, width } = JSON.parse(savedPos);
+                options.position = foundry.utils.mergeObject(options.position || {}, { left, top, width });
             } catch (e) {
                 console.error("Necromancer Helper | Failed to parse saved window position.");
             }
@@ -279,8 +251,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             hasConglomerateOfLimbs: hasSpell("Conglomerate of Limbs"),
             hasHallowedEarth: hasItemSubstring("hallowed earth"),
             hasCorruptedGround: hasItemSubstring("corrupted ground"),
-            isHallowedActive: actor?.items.some(i => i.type === "effect" && i.name === "Effect: Hallowed Earth") || false,
-            isCorruptedActive: actor?.items.some(i => i.type === "effect" && i.name === "Effect: Corrupted Ground") || false,
+            isHallowedActive: !!findNecroEffect(actor, "hallowedEarth"),
+            isCorruptedActive: !!findNecroEffect(actor, "corruptedGround"),
             activeHordeCount: activeHordes.length,
             hasBlossomingGore: hasSpell("Blossoming Gore"),
             activeGoreCount: activeGores.length,
@@ -289,12 +261,40 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
         };
     }
 
+    /** Point the open deck at another necromancer and run the setup check for them. */
+    setNecromancer(necroId) {
+        if (!game.actors.get(necroId)) return;
+        this.necroId = necroId;
+        this.actionStates = {};
+        this.spiritStates = {};
+        this._spellcastingChecked = false;
+        return this.render({ force: true });
+    }
+
+    /** Show the setup reminder if the user owns this Necromancer and hasn't suppressed it. */
+    _checkSpellcasting() {
+        const actor = game.actors.get(this.necroId);
+        if (!actor || actor.getFlag("necromancer-thrall-helper", "suppressSpellcastingCheck")) return;
+        // GMs implicitly own everything; only prompt them for characters they own explicitly.
+        if (!userOwns(actor, { explicit: true })) return;
+        openSpellcastingCheckDialog(actor, checkNecroSpellcasting(actor));
+    }
+
     /** @override */
     _onRender(context, options) {
         super._onRender(context, options);
         const html = this.element;
 
-        // 1. Persist window bounds once per instance
+        // 0. Spellcasting / Focus Pool reminder, once per deck instance
+        if (!this._spellcastingChecked) {
+            this._spellcastingChecked = true;
+            this._checkSpellcasting();
+        }
+
+        // Grow with the thrall list; past the viewport cap (CSS max-height) the list scrolls instead.
+        this.setPosition({ height: "auto" });
+
+        // 1. Persist window position and width once per instance
         if (!this._boundsListenerBound) {
             this._boundsListenerBound = true;
             html.addEventListener("pointerup", () => {
@@ -302,8 +302,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 localStorage.setItem(`necro-deck-bounds-${game.user.id}`, JSON.stringify({
                     left: this.position.left,
                     top: this.position.top,
-                    width: this.position.width,
-                    height: this.position.height
+                    width: this.position.width
                 }));
             });
         }
@@ -405,16 +404,25 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 e.preventDefault();
                 const row = e.currentTarget.closest(".thrall-row");
                 const tokenId = row.dataset.tokenId;
+                if (BUSY_THRALLS.has(tokenId)) return;
                 const action = row.querySelector(".action-dropdown").value;
                 const actor = game.actors.get(this.necroId) || game.user.character;
 
                 if (!actor || !canvas.scene) return notify("error", "Execution Failed: Necromancer or Canvas not found.");
                 const tokenDoc = canvas.scene.tokens.get(tokenId);
                 if (!tokenDoc) return notify("error", "Execution Failed: Thrall token not found on the canvas.");
+                if (!tokenDoc.actor?.isOwner) return notifyForce("warn", "You don't own this thrall. Ask the GM to give you ownership.");
 
                 const handler = THRALL_ACTIONS[action];
-                if (handler) {
-                    await handler({ deck: this, actor, tokenDoc, tokenId, event: e });
+                if (!handler) return;
+                const button = e.currentTarget;
+                BUSY_THRALLS.add(tokenId);
+                button.disabled = true;
+                try {
+                    await guardAction(() => handler({ deck: this, actor, tokenDoc, tokenId, event: e }));
+                } finally {
+                    BUSY_THRALLS.delete(tokenId);
+                    if (button.isConnected) button.disabled = false;
                 }
             });
         });
@@ -466,6 +474,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 try {
                     await dismissAllThrallsForActor(actor);
                     notify("info", "All thralls dismissed.");
+                } catch (err) {
+                    console.error(err);
+                    notify("error", `Dismiss All Thralls failed: ${err?.message ?? err}`);
                 } finally {
                     dismissAllBtn.disabled = false;
                     this.render({ force: false });
@@ -482,6 +493,9 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 try {
                     await dismissAllEffectsForActor(actor);
                     notify("info", "All grave effects and hazards dismissed.");
+                } catch (err) {
+                    console.error(err);
+                    notify("error", `Dismiss All Effects failed: ${err?.message ?? err}`);
                 } finally {
                     dismissEffectsBtn.disabled = false;
                     setTimeout(() => this.render({ force: false }), 150);

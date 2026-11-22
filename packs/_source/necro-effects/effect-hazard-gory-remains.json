@@ -1,0 +1,38 @@
+{
+  "_id": "necroGoryRemains",
+  "name": "Hazard: Gory Remains",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/massacre.webp",
+  "system": {
+    "slug": "hazard-gory-remains",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.classfeatures.Item.nJLKij2UY2nxVmb9]{Flesh}</p><p>Tracks the duration of a Gory Remains difficult terrain hazard. Deleting this will clear the hazard from the map.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 10,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroGoryRemains"
+}

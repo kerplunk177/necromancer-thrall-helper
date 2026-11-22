@@ -1,44 +1,42 @@
 import { ThrallCommandDeck } from "./ui/command-deck.js";
+import { dedupeSceneThrallStrikes } from "./spells/thrall-strike.js";
+import { registerDicerSettings, setupDicerThemes } from "./system/dicer-themes.js";
+import { registerNecroChatFx, registerStrikeArtSetting } from "./system/chat-fx.js";
+import { setupTransientEffectHooks } from "./system/transient-effects.js";
+import { resolveNecromancer, resolveNecromancerOrNotify, setupResolveHooks } from "./system/necro-resolve.js";
 import { setupHooks, repairWorldThrallArt } from "./system/thrall-manager.js";
 import { setupSocket } from "./system/socket.js";
 import { checkBrowsePermissions } from "./system/permissions-notice.js";
 import { sweepEmptyRegions } from "./system/region-sweep.js";
 import { setupEffectColorHooks } from "./system/effect-colors.js";
 import { notifyForce } from "./system/notify.js";
+import { checkIcons } from "./system/icon-check.js";
 
-function toggleCommandDeck() {
-    let isNecro = game.user.isGM;
-    const requireNecro = game.settings.get("necromancer-thrall-helper", "requireNecromancer");
-
-    if (!requireNecro) {
-        isNecro = true;
-    } else if (!isNecro && game.user.character) {
-        const actor = game.user.character;
-        isNecro = actor.items.some(i => {
-            const name = i.name.toLowerCase();
-            const slug = i.system?.slug || "";
-            if (name.includes("necro") || slug.includes("necro") || name.includes("reanimator") || name.includes("undead master")) return true;
-            if (name.includes("conjurer of corpses") || i.flags?.["necromancer-thrall-helper"]) return true;
-            return false;
-        });
-    }
-
-    if (!isNecro) {
-        return notifyForce("warn", "You lack the dark blood and discipline required to command the dead.");
-    }
-
+async function toggleCommandDeck() {
     try {
         const existing = foundry.applications.instances.get("thrall-command-deck");
         if (existing?.rendered) {
-            existing.close();
-        } else if (existing) {
+            // The same necromancer closes the deck; a different one that the selection points at swaps it.
+            const { actor: selected, reason } = await resolveNecromancer({ prompt: false });
+            if (selected && reason?.startsWith("controlled") && selected.id !== existing.necroId) {
+                return existing.setNecromancer(selected.id);
+            }
+            return existing.close();
+        }
+
+        const actor = await resolveNecromancerOrNotify();
+        if (!actor) return;
+
+        if (existing) {
+            existing.necroId = actor.id;
             existing.render({ force: true });
             existing.bringToFront?.();
         } else {
-            new ThrallCommandDeck().render(true);
+            new ThrallCommandDeck(actor.id).render(true);
         }
     } catch (e) {
-        console.warn("Necromancer Helper | Command Deck failed to open:", e);
+        console.error("Necromancer Helper | Command Deck failed to open:", e);
+        notifyForce("error", `The Command Deck failed to open: ${e?.message ?? e}`);
     }
 }
 
@@ -50,6 +48,9 @@ Hooks.once("setup", function () {
 
 Hooks.once("init", () => {
     console.log("Necromancer Thrall Helper | Initializing the dark arts...");
+    registerStrikeArtSetting();
+    registerDicerSettings();
+    setupDicerThemes();
 
     game.keybindings.register("necromancer-thrall-helper", "toggleCommandDeck", {
         name: "Toggle Thrall Command Deck",
@@ -79,6 +80,15 @@ Hooks.once("init", () => {
         config: true,
         type: Boolean,
         default: true
+    });
+
+    game.settings.register("necromancer-thrall-helper", "followSelection", {
+        name: "Command Deck Follows Selection",
+        hint: "If enabled, an open Command Deck switches to another necromancer when you select that necromancer or one of their thralls (you must own them).",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
     });
 
     game.settings.register("necromancer-thrall-helper", "pairWildcardFiles", {
@@ -145,7 +155,15 @@ Hooks.once("init", () => {
 Hooks.once("ready", () => {
     console.log("Necromancer Thrall Helper | Binding hooks.");
     setupHooks();
+    setupResolveHooks();
+    setupTransientEffectHooks();
+    registerNecroChatFx();
+    globalThis.NecroThrallHelper = globalThis.NecroThrallHelper || {};
+    globalThis.NecroThrallHelper.checkIcons = checkIcons; // dev check: await NecroThrallHelper.checkIcons()
     setupEffectColorHooks();
+    const dedupe = () => dedupeSceneThrallStrikes().catch(err => console.warn("Necromancer Thrall Helper | Strike dedupe failed:", err));
+    Hooks.on("canvasReady", dedupe);
+    if (canvas.ready) dedupe();
     repairWorldThrallArt().catch(err => console.warn("Necromancer Thrall Helper | Could not repair thrall art:", err));
     sweepEmptyRegions().catch(err => console.warn("Necromancer Thrall Helper | Region sweep failed:", err));
     checkBrowsePermissions().catch(err => console.warn("Necromancer Thrall Helper | Permission check failed:", err));

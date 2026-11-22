@@ -1,5 +1,6 @@
 import { notify } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeDeathlyScream({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -37,7 +38,7 @@ export async function executeDeathlyScream({ actor, tokenDoc }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Deathly Scream",
         content: `<p>Force <b>${tokenDoc.name}</b> to emit a Deathly Scream? (5-foot emanation, <b>${damageDice}d4 mental</b> damage)</p>`,
         buttons: {
@@ -104,5 +105,5 @@ export async function executeDeathlyScream({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "scream"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

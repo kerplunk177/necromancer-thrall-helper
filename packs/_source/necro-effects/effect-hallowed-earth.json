@@ -1,0 +1,47 @@
+{
+  "_id": "necroHallowEarth",
+  "name": "Effect: Hallowed Earth",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/circle-of-protection.webp",
+  "system": {
+    "slug": "effect-hallowed-earth",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.IvedXsxIyl0odI8U]{Hallowed Earth}</p><p>Aura of holy vitality.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "Aura",
+        "radius": 10,
+        "colors": {
+          "border": "#ffd700",
+          "fill": "#ffd700"
+        }
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroHallowEarth"
+}

@@ -1,6 +1,9 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getTokenDistance } from "./spell-helpers.js";
+import { getNecroEffect } from "../system/effect-catalog.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export async function executeBindHeroicSpirit({ actor, tokenDoc }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -16,7 +19,7 @@ export async function executeBindHeroicSpirit({ actor, tokenDoc }) {
     const spellRank = Math.max(3, Math.ceil((actor.level || 1) / 2));
     const buffValue = spellRank >= 6 ? 2 : 1;
 
-    new Dialog({
+    new NecroDialog({
         title: "Bind Heroic Spirit",
         content: `<p>Sacrifice <b>${tokenDoc.name}</b> to channel an ancient warlord into your body?</p>`,
         buttons: {
@@ -26,26 +29,11 @@ export async function executeBindHeroicSpirit({ actor, tokenDoc }) {
                 callback: async () => {
                     await actor.update({ "system.resources.focus.value": currentFocus - 1 });
 
-                    const effectData = {
-                        name: "Effect: Bind Heroic Spirit",
-                        type: "effect",
-                        img: "icons/magic/light/explosion-star-glow-blue-purple.webp",
-                        system: {
-                            level: { value: spellRank },
-                            duration: { value: 1, unit: "minutes", expiry: "turn-start" },
-                            description: { value: `You gain a +${buffValue} status bonus to attack rolls and saving throws. Whenever you critically hit a creature with a Strike, you can create a thrall adjacent to the target.` },
-                            rules: [
-                                { key: "FlatModifier", selector: "attack", value: buffValue, type: "status" },
-                                { key: "FlatModifier", selector: "saving-throw", value: buffValue, type: "status" },
-                                { key: "RollOption", domain: "strike-damage", option: "heroic-spirit-active" }
-                            ]
-                        }
-                    };
-
+                    const effectData = await getNecroEffect("bindHeroicSpirit", {}, { spellRank, buffValue });
                     await actor.createEmbeddedDocuments("Item", [effectData]);
                     await executeDelete(tokenDoc.id);
 
-                    await ChatMessage.create({
+                    await createNecroCard({
                         speaker: ChatMessage.getSpeaker({ actor }),
                         flavor: `<strong>Bind Heroic Spirit</strong>`,
                         content: `

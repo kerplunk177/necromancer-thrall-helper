@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeBoneBurst({ actor, tokenDoc }) {
     const necroTokens = actor.getActiveTokens();
@@ -23,7 +24,7 @@ export async function executeBoneBurst({ actor, tokenDoc }) {
     const exactDC = getSpellDC(actor);
     const bbSpell = await ensureNecroSpell(actor, {
         name: "Bone Burst",
-        img: "icons/skills/wounds/bone-broken-splinter-white.webp",
+        img: "icons/skills/wounds/bone-broken-marrow-yellow.webp",
         systemData: {
             level: { value: Math.ceil(necroLevel / 2) },
             traits: { value: ["necromancer", "occult", "concentrate", "focus", "uncommon"] },
@@ -43,7 +44,7 @@ export async function executeBoneBurst({ actor, tokenDoc }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Bone Burst",
         content: `<p>Destroy <b>${tokenDoc.name}</b> in a burst of bone shards at <b>${targetToken.name}</b> for <b>${diceCount}d10 piercing</b> damage?</p>`,
         buttons: {
@@ -67,5 +68,5 @@ export async function executeBoneBurst({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "burst"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

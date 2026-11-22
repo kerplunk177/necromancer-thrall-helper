@@ -1,8 +1,10 @@
-import { getFatalMethodName, prepareThrallPayload, getThrallPresets, defaultThrallLabel } from "../system/thrall-manager.js";
+import { getFatalMethodName, prepareThrallPayload, getThrallPresets, defaultThrallLabel, buildPresetOptions, bindUniqueSlotFiltering, batchExcludeIds, payloadPresetId } from "../system/thrall-manager.js";
 import { createSpawnBatch } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { effectColorNum } from "../system/effect-colors.js";
 import { attachGhostHUD, buildOwnerMap } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export function bindSummonThrallButtons(deck, html) {
     // 1. Standard Create Thrall Buttons (Spawn 1 / 2 / 3 / 4)
@@ -26,21 +28,7 @@ export function bindSummonThrallButtons(deck, html) {
             if (applyProliferation) count += 1;
 
             const presets = getThrallPresets(actor);
-            let optionsHtml = `
-                <option value="default">${defaultThrallLabel(actor)}</option>
-                <option value="random">(Random Family Member)</option>
-            `;
-            presets.forEach(p => {
-                const isAlreadyActive = canvas?.scene?.tokens?.some(t =>
-                    t.getFlag("necromancer-thrall-helper", "masterId") === actor.id &&
-                    t.name === p.name
-                );
-                if (p.isUnique && isAlreadyActive) {
-                    optionsHtml += `<option value="${p.id}" disabled>${p.name} (Already Active)</option>`;
-                } else {
-                    optionsHtml += `<option value="${p.id}">${p.name}</option>`;
-                }
-            });
+            const optionsHtml = buildPresetOptions(actor, presets);
 
             let formHtml = `<form><p>Select the identities for your summons:</p>`;
             for (let i = 0; i < count; i++) {
@@ -54,7 +42,7 @@ export function bindSummonThrallButtons(deck, html) {
             }
             formHtml += `</form>`;
 
-            new Dialog({
+            new NecroDialog({
                 title: "Summoning Ritual",
                 content: formHtml,
                 buttons: {
@@ -82,6 +70,7 @@ export function bindSummonThrallButtons(deck, html) {
                             const batch = createSpawnBatch();
                             let proliferationAnnounced = false;
                             let currentSpawnIndex = 0;
+                            const producedIds = new Set();
 
                             placementHint(`Click the canvas to place Summon ${currentSpawnIndex + 1}. Right-click or Esc undoes the last one; Enter sends early.`);
                             document.body.style.cursor = "crosshair";
@@ -152,8 +141,9 @@ export function bindSummonThrallButtons(deck, html) {
                                 const snapped = canvas.grid.getTopLeftPoint ? canvas.grid.getTopLeftPoint(position) : position;
 
                                 const presetId = selections[currentSpawnIndex];
-                                const basePayload = await prepareThrallPayload(actor, presetId);
+                                const basePayload = await prepareThrallPayload(actor, presetId, { excludeIds: batchExcludeIds(presets, selections, currentSpawnIndex, producedIds) });
                                 if (!basePayload) { batch.finish(); cleanUp(); return; }
+                                producedIds.add(payloadPresetId(basePayload));
 
                                 const finalPayload = foundry.utils.mergeObject(basePayload, {
                                     x: snapped.x,
@@ -166,7 +156,7 @@ export function bindSummonThrallButtons(deck, html) {
                                     if (combatRoundKey) {
                                         await actor.setFlag("necromancer-thrall-helper", "proliferationRound", combatRoundKey);
                                     }
-                                    await ChatMessage.create({
+                                    await createNecroCard({
                                         speaker: ChatMessage.getSpeaker({ actor }),
                                         content: `<p><strong>Thrall Proliferation!</strong> <b>${actor.name}</b> twists the magic to spawn an additional thrall this round.</p>`
                                     });
@@ -196,8 +186,9 @@ export function bindSummonThrallButtons(deck, html) {
                     },
                     cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
                 },
-                default: "summon"
-            }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+                default: "summon",
+                render: (dialogHtml) => bindUniqueSlotFiltering(dialogHtml[0], presets, "select[id^='preset-selector-']")
+            }).render(true);
         });
     });
 
@@ -217,7 +208,7 @@ export function bindSummonThrallButtons(deck, html) {
             let optionsHtml = `<option value="default">${defaultThrallLabel(actor)}</option><option value="random">(Random Non-Unique Family Member)</option>`;
             presets.forEach(p => { if (!p.isUnique) optionsHtml += `<option value="${p.id}">${p.name}</option>`; });
 
-            new Dialog({
+            new NecroDialog({
                 title: "Instant Army",
                 content: `<p>Call upon your reserve cache to spawn up to <b>20 thralls</b>!</p><form><div class="form-group" style="margin-bottom: 8px;"><label>Thrall Type:</label><select id="army-preset" style="width: 100%;">${optionsHtml}</select></div></form>`,
                 buttons: {
@@ -228,7 +219,7 @@ export function bindSummonThrallButtons(deck, html) {
                             const presetId = dHtml.find("#army-preset").val();
                             await actor.setFlag("necromancer-thrall-helper", "instantArmyUsed", true);
 
-                            await ChatMessage.create({
+                            await createNecroCard({
                                 speaker: ChatMessage.getSpeaker({ actor }),
                                 flavor: `<strong>Instant Army</strong>`,
                                 content: `<div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; border-left: 4px solid #9333ea;"><p style="margin: 0;"><b>${actor.name}</b> tears the veil, calling upon an emergency reserve of the dead!</p><p style="margin: 4px 0 0 0; font-size: 0.9em; color: #d8b4fe;">Up to 20 thralls emerge from the grave.</p></div>`

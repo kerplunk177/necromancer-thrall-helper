@@ -185,56 +185,6 @@
     font-weight: bold;
     padding: 6px;
 }
-/* Dark Theme for Summoning Dialog */
-.thrall-summon-dialog .window-content {
-    background: #2b2b2b;
-    background-image: none; /* Kills the default Foundry parchment texture */
-    color: var(--color-text-light-highlight);
-    border-radius: 0 0 5px 5px;
-}
-
-.thrall-summon-dialog .window-header {
-    background: #1a1a1a;
-    border-bottom: 2px solid var(--color-border-dark);
-}
-
-.thrall-summon-dialog .dialog-content p,
-.thrall-summon-dialog .form-group label {
-    color: #f0f0e0;
-    font-weight: bold;
-}
-
-.thrall-summon-dialog select {
-    width: 100%;
-    background: rgba(0, 0, 0, 0.4);
-    color: #f0f0e0;
-    border: 1px solid var(--color-border-dark);
-    border-radius: 3px;
-    padding: 4px;
-    font-family: var(--font-primary);
-}
-
-.thrall-summon-dialog select option {
-    background: #1a1c23;
-    color: #f0f0e0;
-}
-
-.thrall-summon-dialog .dialog-buttons {
-    margin-top: 15px;
-}
-
-.thrall-summon-dialog .dialog-buttons button {
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid var(--color-border-dark);
-    color: #f0f0e0;
-    font-weight: bold;
-    transition: all 0.2s ease-in-out;
-}
-
-.thrall-summon-dialog .dialog-buttons button:hover {
-    background: rgba(0, 0, 0, 0.8);
-    box-shadow: 0 0 5px var(--color-shadow-primary);
-}
 /* Roster Administrative Controls */
 :where(.necro-thrall) .roster-controls {
     margin-bottom: 10px;
@@ -436,7 +386,10 @@
     cursor: pointer;
 }
 /* Layout & Scroll Locking */
+/* The deck grows with its thralls up to this cap; then the thrall list scrolls. */
+#thrall-command-deck { max-height: 90vh; }
 #thrall-command-deck .window-content {
+    min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden; 
@@ -445,6 +398,7 @@
 }
 
 .thrall-deck-wrapper {
+    min-height: 0;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -460,6 +414,8 @@
 
 :where(.necro-thrall) .active-thralls-list {
     flex: 1 1 auto; 
+    min-height: 0; 
+    overflow-x: hidden; 
     overflow-y: auto; 
     margin-bottom: 10px; 
     padding-right: 5px; 
@@ -549,8 +505,32 @@
 .necro-settings .necro-chip { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid #888; vertical-align: middle; }
 
 /* Shared dark theme for the module's dialogs */
-.necro-dark .window-content { background: #1b1b22; color: #ddd; }
-.necro-dark .window-header { background: #121218; }
+.necro-dark .window-content { background:#1b1b22; background-image:none; color:#ddd; }
+
+/* One scrollbar look for every module window: thin, module purple on a dark track. */
+.necro-thrall, .necro-thrall * { scrollbar-width: thin; scrollbar-color: #5b21b6 rgba(0,0,0,.25); }
+.necro-thrall *:hover { scrollbar-color: #7c3aed rgba(0,0,0,.25); }
+.necro-thrall ::-webkit-scrollbar { width: 8px; height: 8px; }
+.necro-thrall ::-webkit-scrollbar-track { background: rgba(0,0,0,.25); border-radius: 4px; }
+.necro-thrall ::-webkit-scrollbar-thumb { background: #5b21b6; border-radius: 4px; border: 1px solid #2e1065; }
+.necro-thrall ::-webkit-scrollbar-thumb:hover { background: #7c3aed; }
+.necro-dark .window-header { background:#121218; border-bottom:1px solid #2e2e38; color:#e4e4e7; }
+.necro-dark .dialog-content p, .necro-dark .form-group label, .necro-dark label { color:#e4e4e7; }
+.necro-dark .dialog-content b, .necro-dark strong { color:#c4b5fd; }
+.necro-dark select option { background:#27272a; color:#e4e4e7; }
+.necro-dark .dialog-content .form-fields > select { width:100%; }
+.necro-dark .dialog-buttons, .necro-dark .form-footer { display:flex; gap:6px; margin-top:8px; }
+.necro-dark .dialog-content > :last-child { margin-bottom:0; }
+.necro-dark .dialog-buttons button, .necro-dark .form-footer button {
+  background:#27272a; color:#e4e4e7; border:1px solid #444; border-radius:4px; font-weight:600;
+  transition: background .15s, border-color .15s; }
+.necro-dark .dialog-buttons button:hover, .necro-dark .form-footer button:hover {
+  background:#3f3f46; border-color:#7c3aed; box-shadow:0 0 6px rgba(124,58,237,.45); }
+.necro-dark .dialog-buttons button.default, .necro-dark .form-footer button[autofocus], .necro-dark .form-footer button.default {
+  background:#5b21b6; border-color:#7c3aed; color:#fff; }
+.necro-dark .dialog-buttons button.default:hover { background:#6d28d9; }
+/* v14 core forces buttons to 20px high; buttons that hold an icon or tile need to size to their content. */
+.necro-dark button.tile-btn { height:auto; min-height:0; }
 .necro-dark input[type=checkbox] { accent-color: #7c3aed; }
 .necro-dark hr { border: 0; border-top: 1px solid #333; margin: 10px 0; }
 
@@ -637,9 +617,6 @@
 .necro-portfolio .add-thrall-btn:hover { background: #4c1d95; filter: brightness(1.2); box-shadow: none; }
 .necro-portfolio .adjective-section { background: rgba(0,0,0,.2); border: 1px solid #333; }
 .necro-portfolio .adjective-header { margin-bottom: 6px; }
-.necro-portfolio .adjective-checkbox-grid { scrollbar-width: thin; scrollbar-color: #444 transparent; }
-.necro-portfolio .adjective-checkbox-grid::-webkit-scrollbar { width: 6px; }
-.necro-portfolio .adjective-checkbox-grid::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
 .necro-portfolio .default-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .necro-portfolio .scale-row { display: flex; align-items: center; gap: 8px; }
 .necro-portfolio .scale-row > label { flex: 0 0 130px; font-size: .92em; }

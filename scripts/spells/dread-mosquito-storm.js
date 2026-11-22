@@ -1,7 +1,8 @@
 import { tokenPortrait } from "../system/thrall-manager.js";
 import { executeHazard } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
-import { getSpellDC } from "./spell-helpers.js";
+import { getSpellDC, buildNecroSpellData } from "./spell-helpers.js";
+import { createNecroCard } from "../system/necro-card.js";
 
 export function bindDreadMosquitoButtons(deck, html) {
     const dmsBtn = html.querySelector(".dms-btn");
@@ -26,7 +27,7 @@ export function bindDreadMosquitoButtons(deck, html) {
             };
 
             if (!dmsSpell) {
-                const created = await actor.createEmbeddedDocuments("Item", [{ name: "Dread Mosquito Storm", type: "spell", img: "icons/creatures/invertebrates/wasp-swarm-movement-purple.webp", system: spellSystemData }]);
+                const created = await actor.createEmbeddedDocuments("Item", [await buildNecroSpellData("Dread Mosquito Storm", "icons/creatures/invertebrates/fly-wasp-mosquito-green.webp", spellSystemData)]);
                 dmsSpell = created[0];
             } else {
                 await dmsSpell.update({ system: spellSystemData });
@@ -178,7 +179,7 @@ export function bindDreadMosquitoButtons(deck, html) {
 
                 deck.render({ force: false });
 
-                await ChatMessage.create({
+                await createNecroCard({
                     speaker: ChatMessage.getSpeaker({ actor }),
                     flavor: `<strong>Dread Mosquito Storm</strong>`,
                     content: `

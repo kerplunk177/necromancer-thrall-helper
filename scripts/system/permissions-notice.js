@@ -103,6 +103,7 @@ function showNotice(rows) {
             { action: "close", label: "Close", icon: "fas fa-times", default: true }
         );
         DialogV2.wait({
+            classes: ["necro-thrall", "necro-dark"],
             window: { title: "Thrall Helper: File Browser Permission", icon: "fas fa-folder-open" },
             content,
             rejectClose: false,

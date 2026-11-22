@@ -1,0 +1,57 @@
+{
+  "_id": "necroHallowdDead",
+  "name": "The Hallowed Dead",
+  "type": "effect",
+  "img": "icons/magic/life/cross-embers-glow-yellow-purple.webp",
+  "system": {
+    "slug": "the-hallowed-dead-effect",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.feats-srd.Item.CSyjg8ao4jKpUibR]{The Hallowed Dead}</p><p>Thrall gains the holy trait. Strikes deal +1 spirit damage and gain the holy trait.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": null,
+      "value": -1,
+      "unit": "unlimited"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "RollOption",
+        "domain": "all",
+        "option": "trait:holy"
+      },
+      {
+        "key": "FlatModifier",
+        "selector": "strike-damage",
+        "value": 1,
+        "damageType": "spirit",
+        "type": "untyped"
+      },
+      {
+        "key": "AdjustStrike",
+        "mode": "add",
+        "property": "weapon-traits",
+        "value": "holy"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroHallowdDead"
+}

@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify, placementHint } from "../system/notify.js";
 import { getSpellDC, getTokenDistance, ensureNecroSpell } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeFleshTsunami({ actor, tokenDoc, event }) {
     const currentFocus = actor.system?.resources?.focus?.value || 0;
@@ -14,7 +15,7 @@ export async function executeFleshTsunami({ actor, tokenDoc, event }) {
     const exactDC = getSpellDC(actor);
     const tsunamiSpell = await ensureNecroSpell(actor, {
         name: "Flesh Tsunami",
-        img: "icons/magic/water/wave-water-red.webp",
+        img: "icons/magic/unholy/strike-beam-blood-large-red-purple.webp",
         systemData: {
             level: { value: 8 },
             traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
@@ -37,7 +38,7 @@ export async function executeFleshTsunami({ actor, tokenDoc, event }) {
         }
     });
 
-    new Dialog({
+    new NecroDialog({
         title: "Flesh Tsunami",
         content: `<p>Melt <b>${tokenDoc.name}</b> into a 60-foot cone of Greater Difficult Terrain?</p>`,
         buttons: {

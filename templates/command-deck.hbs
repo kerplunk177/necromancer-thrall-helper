@@ -82,20 +82,16 @@
         :where(.necro-thrall) .flavor-spirit { border-left: 5px solid #0ea5e9 !important; }
         :where(.necro-thrall) .flavor-grave { border-left: 5px solid #4b5563 !important; }
 
-        /* Custom Dark Scrollbar */
-        :where(.necro-thrall) .active-thralls-list::-webkit-scrollbar { width: 8px; }
-        :where(.necro-thrall) .active-thralls-list::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
-        :where(.necro-thrall) .active-thralls-list::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; border: 1px solid #222; }
-        :where(.necro-thrall) .active-thralls-list::-webkit-scrollbar-thumb:hover { background: #666; }
 
         /* Thrall Roster List */
         :where(.necro-thrall) .active-thralls-list { 
             display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+            grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); 
             align-content: start;
             gap: 10px; 
             flex: 1; 
             overflow-y: auto; 
+            overflow-x: hidden; 
             padding-right: 6px; 
             border: 1px solid #222; 
             background: rgba(0,0,0,0.2); 

@@ -34,6 +34,22 @@ export function notify(level, msg, opts = {}) {
 
 export const notifyForce = (level, msg, opts = {}) => notify(level, msg, { ...opts, force: true });
 
+/**
+ * Run a Command Deck action and turn a failure into a toast. A player who can't update a thrall's
+ * items (they don't own it) gets a plain explanation instead of a silent console error.
+ */
+export async function guardAction(fn) {
+    try {
+        return await fn();
+    } catch (err) {
+        console.error("Necromancer Thrall Helper | action failed:", err);
+        const denied = /lacks permission|permission/i.test(err?.message ?? "");
+        notifyForce("error", denied
+            ? "You don't own this thrall. Ask the GM to give you ownership."
+            : `That action failed: ${err?.message ?? err}`);
+    }
+}
+
 
 // --- Placement hints: a small label that follows the cursor instead of a toast ---
 const HINT_TIMEOUT_MS = 20000;

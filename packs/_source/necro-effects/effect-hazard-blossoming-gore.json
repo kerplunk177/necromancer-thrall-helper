@@ -1,0 +1,38 @@
+{
+  "_id": "necroBlosmGore00",
+  "name": "Hazard: Blossoming Gore",
+  "type": "effect",
+  "img": "icons/magic/unholy/projectiles-blood-salvo-red.webp",
+  "system": {
+    "slug": "hazard-blossoming-gore",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.77Zvk75oywQ7MBVV]{Blossoming Gore}</p><p>Tracks the duration of the Blossoming Gore hazard. Deleting this clears the hazard from the map.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroBlosmGore00"
+}

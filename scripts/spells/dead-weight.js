@@ -1,6 +1,7 @@
 import { executeDelete } from "../system/socket.js";
 import { notify } from "../system/notify.js";
 import { getSpellDC, ensureNecroSpell, postManualSaveCard } from "./spell-helpers.js";
+import { NecroDialog } from "../ui/necro-dialog.js";
 
 export async function executeDeadWeight({ actor, tokenDoc }) {
     const necroLevel = actor.level || 1;
@@ -9,7 +10,7 @@ export async function executeDeadWeight({ actor, tokenDoc }) {
 
     const dwSpell = await ensureNecroSpell(actor, {
         name: "Dead Weight",
-        img: "icons/magic/death/undead-zombie-glowing-green.webp",
+        img: "icons/magic/death/skeleton-worn-skull-tan.webp",
         systemData: {
             level: { value: spellRank },
             traits: { value: ["necromancer", "manipulate", "concentrate", "focus", "uncommon"] },
@@ -34,7 +35,7 @@ export async function executeDeadWeight({ actor, tokenDoc }) {
 
     const targetToken = validTargets[0];
 
-    new Dialog({
+    new NecroDialog({
         title: "Dead Weight",
         content: `<p>Hurl <b>${tokenDoc.name}</b> at <b>${targetToken.name}</b> to fuse their flesh together?</p>`,
         buttons: {
@@ -62,5 +63,5 @@ export async function executeDeadWeight({ actor, tokenDoc }) {
             cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
         },
         default: "hurl"
-    }, { classes: ["dialog", "necro-thrall", "thrall-summon-dialog"] }).render(true);
+    }).render(true);
 }

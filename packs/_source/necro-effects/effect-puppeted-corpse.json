@@ -1,0 +1,97 @@
+{
+  "_id": "necroPuppetCorps",
+  "name": "Effect: Puppeted Corpse",
+  "type": "effect",
+  "img": "icons/magic/control/control-influence-puppet.webp",
+  "system": {
+    "slug": "puppeted-corpse",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.classfeatures.Item.vt0idZAV9EDD1UN1]{Puppeteer}</p><p>Your heroic spirit puppets your corpse. You are an undead object. Immune to bleed, death effects, disease, healing, nonlethal, poison, void, doomed, drained, fatigued, sickened, and unconscious. Broken Threshold 100 (Slowed 1).</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "FlatModifier",
+        "selector": "hp",
+        "value": 0,
+        "type": "untyped"
+      },
+      {
+        "key": "Immunity",
+        "type": "bleed"
+      },
+      {
+        "key": "Immunity",
+        "type": "death-effects"
+      },
+      {
+        "key": "Immunity",
+        "type": "disease"
+      },
+      {
+        "key": "Immunity",
+        "type": "healing"
+      },
+      {
+        "key": "Immunity",
+        "type": "nonlethal-attacks"
+      },
+      {
+        "key": "Immunity",
+        "type": "poison"
+      },
+      {
+        "key": "Immunity",
+        "type": "void"
+      },
+      {
+        "key": "Immunity",
+        "type": "doomed"
+      },
+      {
+        "key": "Immunity",
+        "type": "drained"
+      },
+      {
+        "key": "Immunity",
+        "type": "fatigued"
+      },
+      {
+        "key": "Immunity",
+        "type": "sickened"
+      },
+      {
+        "key": "Immunity",
+        "type": "unconscious"
+      },
+      {
+        "key": "Immunity",
+        "type": "prone"
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroPuppetCorps"
+}

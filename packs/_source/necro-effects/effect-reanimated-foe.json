@@ -1,0 +1,49 @@
+{
+  "_id": "necroReanimFoe00",
+  "name": "Reanimated Foe",
+  "type": "effect",
+  "img": "systems/pf2e/icons/spells/create-undead.webp",
+  "system": {
+    "slug": "reanimated-foe",
+    "description": {
+      "value": "<p>Granted by @UUID[Compendium.pf2e.spells-srd.Item.jtvMJEkiads8a4zj]{Reanimate Foe}</p><p><b>Decay:</b> Loses 0 HP at the end of its turn. Cannot be healed.</p>"
+    },
+    "duration": {
+      "sustained": false,
+      "expiry": "turn-start",
+      "value": 1,
+      "unit": "minutes"
+    },
+    "tokenIcon": {
+      "show": true
+    },
+    "rules": [
+      {
+        "key": "Immunity",
+        "type": "healing"
+      },
+      {
+        "key": "ActiveEffectLike",
+        "mode": "override",
+        "path": "system.attributes.hp.max",
+        "value": 100
+      }
+    ],
+    "level": {
+      "value": 1
+    }
+  },
+  "effects": [],
+  "flags": {},
+  "folder": null,
+  "sort": 0,
+  "ownership": {
+    "default": 0
+  },
+  "_stats": {
+    "coreVersion": "14",
+    "systemId": "pf2e",
+    "systemVersion": "8.7.1"
+  },
+  "_key": "!items!necroReanimFoe00"
+}
