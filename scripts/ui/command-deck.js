@@ -216,7 +216,7 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
             consumeDisabled,
             hasSpiritFascination: actorHasSpiritFascination(actor),
             hasThrallVitality: canThrallDealVitality(actor),
-            hasPuppeteer: actor?.items.some(i => i.name.toLowerCase().includes("puppeteer") || i.system?.slug?.includes("puppeteer")) || false|| getFatalMethodName(actor)?.toLowerCase().includes("puppeteer"),
+            hasPuppeteer: actor?.items.some(i => i.name.toLowerCase().includes("puppeteer") || i.system?.slug?.includes("puppeteer")) || getFatalMethodName(actor)?.toLowerCase().includes("puppeteer") || false,
             hasDeathlyScream: hasSpell("Deathly Scream"),
             hasBindHeroicSpirit: hasSpell("Bind Heroic Spirit"),
             hasRecurringNightmare,
@@ -472,8 +472,8 @@ export class ThrallCommandDeck extends HandlebarsApplicationMixin(ApplicationV2)
                 dismissAllBtn.disabled = true;
                 const actor = game.actors.get(this.necroId) || game.user.character;
                 try {
-                    await dismissAllThrallsForActor(actor);
-                    notify("info", "All thralls dismissed.");
+                    const count = await dismissAllThrallsForActor(actor);
+                    notify("info", count > 0 ? `Dismissed ${count} thrall(s).` : "No matching thralls to dismiss.");
                 } catch (err) {
                     console.error(err);
                     notify("error", `Dismiss All Thralls failed: ${err?.message ?? err}`);

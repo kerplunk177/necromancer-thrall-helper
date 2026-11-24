@@ -503,11 +503,57 @@ globalThis.NecroThrallHelper.spawnOriginMarker = async (sceneId, drawingData, du
 /**
  * Dismiss all active thrall tokens on the current scene belonging to this Necromancer.
  */
+export const DISMISS_ALL_CATEGORIES = [
+    { key: "thrall", label: "Standard Thralls" },
+    { key: "lancer", label: "Skeletal Lancers" },
+    { key: "tendril", label: "Bloody Tendrils" },
+    { key: "conglomerate", label: "Conglomerate of Limbs" },
+    { key: "graveyard", label: "Living Graveyard" },
+    { key: "nightmare", label: "Recurring Nightmare" },
+    { key: "horde", label: "Zombie Horde" },
+    { key: "perfected", label: "Perfected Thrall" },
+    { key: "reanimated", label: "Reanimated Foes" }
+];
+
+/**
+ * Bucket a thrall token into a Dismiss All category.
+ */
+export function classifyThrallToken(tokenDoc) {
+    const flags = tokenDoc?.flags?.["necromancer-thrall-helper"] || {};
+    const name = (tokenDoc?.name || "").toLowerCase();
+    if (flags.isReanimatedFoe || tokenDoc?.actor?.items?.some(i => i.getFlag("necromancer-thrall-helper", "isReanimatedFoe"))) return "reanimated";
+    if (flags.isHordeAnchor || name === "zombie horde") return "horde";
+    if (flags.isPerfectedThrall || name.includes("perfected")) return "perfected";
+    if (flags.isLivingGraveyard || name.includes("living graveyard")) return "graveyard";
+    if (flags.isRecurringNightmare || name.includes("recurring nightmare")) return "nightmare";
+    if (flags.isSkeletalLancer || name.includes("lancer")) return "lancer";
+    if (flags.tendrilTetherId || name.includes("tendril")) return "tendril";
+    if (name.includes("conglomerate")) return "conglomerate";
+    return "thrall";
+}
+
+/**
+ * Read the actor's Dismiss All category checkboxes (all default to true).
+ */
+export function getDismissAllFilter(actor) {
+    const saved = actor?.getFlag?.("necromancer-thrall-helper", "dismissAllFilter") || {};
+    const filter = {};
+    for (const { key } of DISMISS_ALL_CATEGORIES) {
+        filter[key] = saved[key] !== false;
+    }
+    return filter;
+}
+
+/**
+ * Dismiss active thrall tokens on the current scene matching this Necromancer's Dismiss All filter.
+ */
 export async function dismissAllThrallsForActor(actor) {
     if (!actor || !canvas.scene) return 0;
 
-    // Same set the deck lists, plus reanimated foes (they carry masterId too).
-    const thrallIds = getActorThrallTokens(actor, { includeReanimated: true }).map(t => t.id);
+    const filter = getDismissAllFilter(actor);
+    const thrallIds = getActorThrallTokens(actor, { includeReanimated: true })
+        .filter(t => filter[classifyThrallToken(t)] !== false)
+        .map(t => t.id);
     return await executeDeleteBatch(thrallIds, canvas.scene.id);
 }
 

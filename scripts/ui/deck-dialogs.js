@@ -2,6 +2,7 @@ import { artKind, BUNDLED_THRALL } from "../system/thrall-manager.js";
 import { notify } from "../system/notify.js";
 import { getZoneConfig, describeDramatisStyle } from "../system/tendril-zone.js";
 import { ownerColor, syncAllParticleColors, EFFECT_COLOR_KEYS } from "../system/effect-colors.js";
+import { DISMISS_ALL_CATEGORIES, getDismissAllFilter } from "../spells/spell-helpers.js";
 import { NecroDialog } from "./necro-dialog.js";
 
 const SPELLCASTING_PROBLEMS = {
@@ -313,6 +314,9 @@ export function openDefaultLookDialog(actor) {
 /**
  * Open the "Necromancer Settings" dialog (zone borders, effect colors, notification verbosity).
  */
+/**
+ * Open the "Necromancer Settings" dialog (zone borders, effect colors, Dismiss All filter, notifications).
+ */
 export function openNecroSettingsDialog(actor) {
     if (!actor) return;
 
@@ -325,6 +329,12 @@ export function openNecroSettingsDialog(actor) {
             <label>${label}</label>
             <input type="color" class="necro-swatch fx-color" data-key="${key}" value="${saved[key] || fallback || playerColor}">
         </div>`).join("");
+    const dismissFilter = getDismissAllFilter(actor);
+    const dismissBoxes = DISMISS_ALL_CATEGORIES.map(({ key, label }) => `
+        <label style="display: flex; align-items: center; gap: 6px; font-size: 0.88em; cursor: pointer;">
+            <input type="checkbox" class="dismiss-filter-cb" data-key="${key}" ${dismissFilter[key] ? "checked" : ""} style="margin: 0; flex: 0 0 auto;">
+            <span>${label}</span>
+        </label>`).join("");
     const level = game.settings.get("necromancer-thrall-helper", "notificationLevel");
     const levelOptions = Object.entries(game.settings.settings.get("necromancer-thrall-helper.notificationLevel").choices)
         .map(([v, l]) => `<option value="${v}" ${v === level ? "selected" : ""}>${l}</option>`).join("");
@@ -347,6 +357,10 @@ export function openNecroSettingsDialog(actor) {
                     <input type="checkbox" id="fx-use-player" ${saved.usePlayer ? "checked" : ""}>
                 </div>
                 ${rows}
+                <h3>Dismiss All Thralls Includes</h3>
+                <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px; margin-bottom: 8px;">
+                    ${dismissBoxes}
+                </div>
                 <h3>Notifications</h3>
                 <div class="necro-row">
                     <label title="Applies to you only, on this device.">Pop-ups</label>
@@ -382,6 +396,7 @@ export function openNecroSettingsDialog(actor) {
                 label: "",
                 callback: async () => {
                     await actor.unsetFlag("necromancer-thrall-helper", "effectColors");
+                    await actor.unsetFlag("necromancer-thrall-helper", "dismissAllFilter");
                     for (const item of actor.items) {
                         if (item.type === "spell" && item.flags?.["aoe-easy-resolve"]?.useCustomColor) {
                             await item.update({ "flags.aoe-easy-resolve.useCustomColor": false });
@@ -400,7 +415,12 @@ export function openNecroSettingsDialog(actor) {
                         zoneBorder: { linked, color: linked ? zoneColor : dialogHtml.find("#fx-zone-color").val() }
                     };
                     dialogHtml.find(".fx-color").each((_i, el) => { cfg[el.dataset.key] = el.value; });
+                    const nextDismissFilter = {};
+                    dialogHtml.find(".dismiss-filter-cb").each((_i, el) => {
+                        nextDismissFilter[el.dataset.key] = el.checked;
+                    });
                     await actor.setFlag("necromancer-thrall-helper", "effectColors", cfg);
+                    await actor.setFlag("necromancer-thrall-helper", "dismissAllFilter", nextDismissFilter);
                     await syncAllParticleColors(actor);
                     await game.settings.set("necromancer-thrall-helper", "notificationLevel", dialogHtml.find("#fx-notify-level").val());
                     notify("info", "Settings saved.");

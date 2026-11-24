@@ -288,8 +288,7 @@ export function bindSummonThrallButtons(deck, html) {
                                 const finalPayload = foundry.utils.mergeObject(basePayload, {
                                     x: snapped.x,
                                     y: snapped.y,
-                                    elevation: actor?.getActiveTokens()[0]?.document?.elevation || 0,
-                                    delta: { ownership: { [game.user.id]: 3 } }
+                                    delta: { ownership: buildOwnerMap(actor) }
                                 });
 
                                 currentSpawnIndex++;

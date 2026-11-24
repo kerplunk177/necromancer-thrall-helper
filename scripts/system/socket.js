@@ -40,6 +40,38 @@ function clearSpawnMarker(marker) {
     marker.parent?.removeChild(marker);
     marker.destroy({ children: true });
 }
+/**
+ * Stamp Foundry v14's native `level` ID and matching `elevation` onto a token payload
+ * so thralls spawn on the floor the user is actually viewing/targeting.
+ */
+function applySpawnLevel(payload, scene) {
+    if (!scene) return payload;
+    const masterId = payload.flags?.["necromancer-thrall-helper"]?.masterId;
+    const masterToken = masterId
+        ? scene.tokens.find(t => t.actorId === masterId || t.actor?.id === masterId)
+        : null;
+
+    if (scene.levels?.size) {
+        if (!payload.level) {
+            if (canvas.ready && canvas.scene?.id === scene.id && canvas.level?.id) {
+                payload.level = canvas.level.id;
+            } else if (masterToken?.level) {
+                payload.level = masterToken.level;
+            }
+        }
+        if (payload.elevation === undefined || payload.elevation === null) {
+            if (masterToken && masterToken.level === payload.level) {
+                payload.elevation = masterToken.elevation ?? 0;
+            } else {
+                const levelDoc = payload.level ? scene.levels.get(payload.level) : null;
+                payload.elevation = levelDoc?.elevation?.bottom ?? 0;
+            }
+        }
+    } else if (payload.elevation === undefined || payload.elevation === null) {
+        payload.elevation = masterToken?.elevation ?? 0;
+    }
+    return payload;
+}
 
 // Inevitable Return: what happens to the corpse token the new thrall rose from. GM-side only.
 let rememberedCorpseFate = null; // "keep" | "hide", for this session once the GM ticks "Remember"
@@ -117,6 +149,8 @@ export function createSpawnBatch({ sceneId = canvas.scene?.id } = {}) {
 
         /** Queue a placement (players) or spawn it right away (GM). */
         add(payload, extras = {}) {
+            const scene = game.scenes.get(sceneId) || canvas.scene;
+            applySpawnLevel(payload, scene);
             if (isGM) return executeSpawn(payload, sceneId, extras).catch(err => console.error(err));
             const marker = canvas.scene?.id === sceneId
                 ? drawSpawnMarker(payload.x, payload.y, items.length + 1)
@@ -247,10 +281,10 @@ async function requestSpawnBatch({ sceneId, necroId, items = [] } = {}) {
             const data = foundry.utils.mergeObject(it.payload, {
                 x: it.payload.x,
                 y: it.payload.y,
-                elevation: it.payload.elevation ?? 0,
                 sort: maxSort + 100 * (n + 1),
                 hidden: false
             });
+            applySpawnLevel(data, scene);
             await resolvePendingWildcard(data);
             await finalizePendingZone(data);
             applyPartyAlliance(data);
@@ -261,7 +295,11 @@ async function requestSpawnBatch({ sceneId, necroId, items = [] } = {}) {
 
         // Hazard regions (tendril saves) exist only for spawns that were approved and created.
         if (created?.length) {
-            const regions = approvedItems.map(i => i.region).filter(Boolean);
+            const regions = approvedItems.map((it, idx) => {
+                if (!it.region) return null;
+                const levelId = spawnData[idx]?.level;
+                return levelId ? foundry.utils.mergeObject(it.region, { levels: [levelId] }) : it.region;
+            }).filter(Boolean);
             if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
         }
 
@@ -426,10 +464,10 @@ export async function executeSpawn(payload, sceneId = canvas.scene?.id, extras =
         const spawnData = foundry.utils.mergeObject(payload, { 
             x: payload.x, 
             y: payload.y, 
-            elevation: payload.elevation ?? 0,
             sort: maxSort + 100, 
             hidden: false 
         });
+        applySpawnLevel(spawnData, scene);
         await resolvePendingWildcard(spawnData);
         await finalizePendingZone(spawnData);
         applyPartyAlliance(spawnData);
@@ -444,7 +482,12 @@ export async function executeSpawn(payload, sceneId = canvas.scene?.id, extras =
                 }
             }, 100);
         }
-        if (createdTokens?.length && extras.region) await scene.createEmbeddedDocuments("Region", [extras.region]);
+        if (createdTokens?.length && extras.region) {
+            const regionPayload = spawnData.level
+                ? foundry.utils.mergeObject(extras.region, { levels: [spawnData.level] })
+                : extras.region;
+            await scene.createEmbeddedDocuments("Region", [regionPayload]);
+        }
         if (createdTokens?.length && extras.corpse) promptCorpseFate(extras.corpse).catch(err => console.error(err));
         return createdTokens;
     } else {
@@ -494,4 +537,4 @@ export async function executeHazard(regionData, drawingData, sceneId = canvas.sc
         }
         return await socketlibSocket.executeAsGM("createHazardAsGM", regionData, drawingData, sceneId);
     }
-}
+}

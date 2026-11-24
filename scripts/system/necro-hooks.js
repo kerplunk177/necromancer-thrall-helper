@@ -2014,8 +2014,17 @@ Hooks.on("createToken", async (tokenDoc, _options, userId) => {
     if (!masterActor) return;
 
     const activeNecroToken = masterActor.getActiveTokens().find(t => t.scene?.id === tokenDoc.parent?.id);
-    if (activeNecroToken && activeNecroToken.document.elevation !== tokenDoc.elevation) {
-        await updateIfExists(tokenDoc, { elevation: activeNecroToken.document.elevation });
+    if (activeNecroToken) {
+        const levelUpdates = {};
+        if (activeNecroToken.document.level && activeNecroToken.document.level !== tokenDoc.level) {
+            levelUpdates.level = activeNecroToken.document.level;
+        }
+        if (activeNecroToken.document.elevation !== tokenDoc.elevation) {
+            levelUpdates.elevation = activeNecroToken.document.elevation;
+        }
+        if (Object.keys(levelUpdates).length > 0) {
+            await updateIfExists(tokenDoc, levelUpdates);
+        }
     }
 
     const isCustomThrall = tokenDoc.getFlag("necromancer-thrall-helper", "masterId") === masterId;
