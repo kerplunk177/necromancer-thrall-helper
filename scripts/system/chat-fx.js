@@ -3,7 +3,7 @@ import { findNecroEffect } from "./effect-catalog.js";
 
 // Chat cards for thrall Strikes and necromancer spells: graphite card, border in the damage type's
 // color, gradient and glow. A hidden marker is stamped into the flavor when the message is created, and
-// the CSS (injected on every client at ready) keys on it, so the cards look the same for every player,
+// the CSS (added the first time a card needs it) keys on it, so the cards look the same for every player,
 // after a reload, and in chat history. Cards are matched by what rolled them, not by who clicked, so
 // rolls from a character sheet are styled too. A card with more than one damage type takes the color
 // of its first damage instance.
@@ -36,51 +36,81 @@ const strikeArt = (type) => {
 const esc = (v) => foundry.utils.escapeHTML(String(v ?? ""));
 const mix = (color, percent, base) => `color-mix(in srgb,${color} ${percent}%,${base})`;
 
-// Card background. The tint fades to graphite within the header, so the dice boxes and icons sit on a dark card.
-const cardBackground = (c, top) =>
-    `radial-gradient(110% 80% at 100% 100%,${mix(c, 14, "transparent")},transparent 60%),` +
-    `linear-gradient(180deg,${mix(c, top, CARD_BASE)} 0%,${mix(c, Math.round(top * 0.43), CARD_BASE)} 10%,${CARD_BASE} 22%)`;
+// Card background: the tint fades to graphite within the header, so the dice boxes and icons sit on a dark card (see chatCss).
 // Per-type backgrounds that replace the default. Void: black at the top, sinking into the abyss purple.
 const CARD_BACKGROUNDS = {
     void: (c) => `linear-gradient(180deg,#000 0%,#07050d 30%,${mix(c, 30, "#000")} 75%,${mix(c, 55, "#000")} 100%)`
 };
 
+// One shared rule set. Each card's colors arrive as custom properties set on its <li> by styleCard(),
+// so the sheet stays small and never needs :has(). The percent signs live in --nth-t1/--nth-t2 (not after var()).
+// The selector's three attribute/class parts match the specificity the old :has() version had.
+const SEL = "li.chat-message.nth-card[data-nth][data-nth-kind]";
+const tr = (p) => mix("var(--nth)", p, "transparent");
+
 function chatCss() {
-    return Object.entries(CARD_COLORS).map(([t, c]) => {
-        const icon = DMG_COLORS[t] ?? c;
-        const sel = `li.chat-message:has(.nth-fx[data-type="${t}"])`;
-        const top = TINT[t] ?? 28;
-        const ink = t === "vitality" ? "#ffffff" : mix(c, t === "void" ? 40 : 65, "#fff"); // dark void needs a lighter title
-        return `${sel}{border:2px solid ${c};border-radius:8px;color:#ececef;` +
-            `background:${(CARD_BACKGROUNDS[t] ?? ((x) => cardBackground(x, top)))(c)} !important;` +
-            `box-shadow:0 0 8px ${mix(c, 55, "transparent")},inset 0 0 6px ${mix(c, 30, "transparent")}}` +
-            `${sel} .message-header{border-bottom:1px solid ${mix(c, 70, "transparent")}}` +
-            `${sel} .message-header, ${sel} .flavor-text, ${sel} .message-content{color:#ececef}` +
-            `${sel} .message-metadata, ${sel} .message-metadata a, ${sel} .whisper-to{color:#b3b3bc}` +
-            `${sel} .card-header h3{color:${ink};text-shadow:0 0 1px ${c}, 0 0 6px ${c}66;font-weight:bold}` +
-            `${sel} h4.action, ${sel} h4.action strong{color:#ececef}` +
-            `${sel} h4.message-sender{color:#ececef}` +
-            `${sel} .message-content :is(h1,h2,h3):not(.card-header h3){color:#ececef;border-color:${mix(c, 50, "transparent")}}` +
-            `${sel} .message-content button{color:#ececef;background:rgba(255,255,255,.07);border:1px solid ${mix(c, 45, "#555")};box-shadow:none}` +
-            `${sel} .message-content button:hover{background:${mix(c, 22, "transparent")};border-color:${c};box-shadow:0 0 4px ${mix(c, 50, "transparent")}}` +
-            `${sel} .message-content button.critical-success{color:${ink}}` +
-            `${sel} .dice-formula{color:#ececef;background:rgba(0,0,0,.5);border:1px solid ${mix(c, 35, "transparent")}}` +
-            `${sel} .dice-total{background:rgba(0,0,0,.5);border:1px solid ${mix(c, 50, "transparent")}}` +
-            `${sel} .dice-total:not([class*="success"]):not([class*="failure"]){color:#fff}` +
-            `${sel} .dice-tooltip .tooltip-part{background:rgba(0,0,0,.4);border-color:${mix(c, 30, "transparent")}}` +
-            `${sel} :is(.degree-of-success, .dice-total) :is(.critical-success, .criticalSuccess), ${sel} .dice-total:is(.critical-success, .criticalSuccess){color:#5fd87a}` +
-            `${sel} .degree-of-success .success, ${sel} .dice-total.success{color:#7fb4ff}` +
-            `${sel} .degree-of-success .failure, ${sel} .dice-total.failure{color:#ffa64d}` +
-            `${sel} :is(.degree-of-success, .dice-total) :is(.critical-failure, .criticalFailure), ${sel} .dice-total:is(.critical-failure, .criticalFailure){color:#ff9494}` +
-            `${sel} .dice-tooltip :is(.part-formula, .part-total, .part-header){color:#ececef}` +
-            `${sel} :is(.damage.instance, .tooltip-part.damage){color:#ececef}` +
-            `${sel} :is(.damage.instance, .tooltip-part.damage) i{color:${icon}}` +
-            `${sel} [data-visibility="gm"]:not(.dice-formula){color:#ececef;background:${mix(c, 22, "transparent")};border-radius:3px}` +
-            `${sel} .message-content hr{border-color:${mix(c, 50, "transparent")};background:${mix(c, 50, "transparent")}}` +
-            `${sel} h4.action i.nth-ico{color:${icon};text-shadow:0 0 1px #000;font-size:1.35em;vertical-align:-.12em;margin-left:.15em}` +
-            `${sel} .nth-head img{border:none;object-fit:cover}` +
-            `li.chat-message:has(.nth-fx[data-type="${t}"][data-kind="attack-roll"]) h4.action{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em}`;
-    }).join("\n");
+    const sel = SEL;
+    const bg = `radial-gradient(110% 80% at 100% 100%,${tr(14)},transparent 60%),` +
+        `linear-gradient(180deg,color-mix(in srgb,var(--nth) var(--nth-t1),${CARD_BASE}) 0%,` +
+        `color-mix(in srgb,var(--nth) var(--nth-t2),${CARD_BASE}) 10%,${CARD_BASE} 22%)`;
+    const rules = [
+        `${sel}{border:2px solid var(--nth);border-radius:8px;color:#ececef;background:${bg} !important;` +
+            `box-shadow:0 0 8px ${tr(55)},inset 0 0 6px ${tr(30)}}`,
+        `${sel} .message-header{border-bottom:1px solid ${tr(70)}}`,
+        `${sel} .message-header, ${sel} .flavor-text, ${sel} .message-content{color:#ececef}`,
+        `${sel} .message-metadata, ${sel} .message-metadata a, ${sel} .whisper-to{color:#b3b3bc}`,
+        `${sel} .card-header h3{color:var(--nth-ink);text-shadow:0 0 1px var(--nth), 0 0 6px ${tr(40)};font-weight:bold}`,
+        `${sel} h4.action, ${sel} h4.action strong{color:#ececef}`,
+        `${sel} h4.message-sender{color:#ececef}`,
+        `${sel} .message-content :is(h1,h2,h3):not(.card-header h3){color:#ececef;border-color:${tr(50)}}`,
+        `${sel} .message-content button{color:#ececef;background:rgba(255,255,255,.07);border:1px solid ${mix("var(--nth)", 45, "#555")};box-shadow:none}`,
+        `${sel} .message-content button:hover{background:${tr(22)};border-color:var(--nth);box-shadow:0 0 4px ${tr(50)}}`,
+        `${sel} .message-content button.critical-success{color:var(--nth-ink)}`,
+        `${sel} .dice-formula{color:#ececef;background:rgba(0,0,0,.5);border:1px solid ${tr(35)}}`,
+        `${sel} .dice-total{background:rgba(0,0,0,.5);border:1px solid ${tr(50)}}`,
+        `${sel} .dice-total:not([class*="success"]):not([class*="failure"]){color:#fff}`,
+        `${sel} .dice-tooltip .tooltip-part{background:rgba(0,0,0,.4);border-color:${tr(30)}}`,
+        `${sel} :is(.degree-of-success, .dice-total) :is(.critical-success, .criticalSuccess), ${sel} .dice-total:is(.critical-success, .criticalSuccess){color:#5fd87a}`,
+        `${sel} .degree-of-success .success, ${sel} .dice-total.success{color:#7fb4ff}`,
+        `${sel} .degree-of-success .failure, ${sel} .dice-total.failure{color:#ffa64d}`,
+        `${sel} :is(.degree-of-success, .dice-total) :is(.critical-failure, .criticalFailure), ${sel} .dice-total:is(.critical-failure, .criticalFailure){color:#ff9494}`,
+        `${sel} .dice-tooltip :is(.part-formula, .part-total, .part-header){color:#ececef}`,
+        `${sel} :is(.damage.instance, .tooltip-part.damage){color:#ececef}`,
+        `${sel} :is(.damage.instance, .tooltip-part.damage) i{color:var(--nth-icon)}`,
+        `${sel} [data-visibility="gm"]:not(.dice-formula){color:#ececef;background:${tr(22)};border-radius:3px}`,
+        `${sel} .message-content hr{border-color:${tr(50)};background:${tr(50)}}`,
+        `${sel} h4.action i.nth-ico{color:var(--nth-icon);text-shadow:0 0 1px #000;font-size:1.35em;vertical-align:-.12em;margin-left:.15em}`,
+        `${sel} .nth-head img{border:none;object-fit:cover}`,
+        `${sel}[data-nth-kind="attack-roll"] h4.action{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em}`
+    ];
+    // Per-type backgrounds that replace the default.
+    for (const [t, fn] of Object.entries(CARD_BACKGROUNDS)) {
+        if (CARD_COLORS[t]) rules.push(`${sel}[data-nth="${t}"]{background:${fn("var(--nth)")} !important}`);
+    }
+    return rules.join("\n");
+}
+
+const FX = /class="nth-fx" data-type="([^"]*)" data-kind="([^"]*)"/;
+
+/** Give a themed card's <li> its class and color variables. Cheap string tests first: most messages aren't ours. */
+function styleCard(message, html) {
+    const text = message.flavor?.includes("nth-fx") ? message.flavor
+        : message.content?.includes("nth-fx") ? message.content : null;
+    const m = text && FX.exec(text);
+    if (!m || !(html instanceof HTMLElement)) return;
+    const [, type, kind] = m;
+    const c = CARD_COLORS[type];
+    if (!c) return;
+    addCardCss();
+    const top = TINT[type] ?? 28;
+    html.classList.add("nth-card");
+    html.dataset.nth = type;
+    html.dataset.nthKind = kind;
+    html.style.setProperty("--nth", c);
+    html.style.setProperty("--nth-icon", DMG_COLORS[type] ?? c);
+    html.style.setProperty("--nth-ink", type === "vitality" ? "#ffffff" : mix(c, type === "void" ? 40 : 65, "#fff")); // dark void needs a lighter title
+    html.style.setProperty("--nth-t1", `${top}%`);
+    html.style.setProperty("--nth-t2", `${Math.round(top * 0.43)}%`);
 }
 
 const isStrikeItem = (item) => item?.system?.slug === "thrall-strike" || /^Thrall Strike/.test(item?.name ?? "");
@@ -106,6 +136,21 @@ function strikeHeader(tokenDoc, item, type) {
     };
 }
 
+// A spell description card (the cast card PF2e posts before the rolls).
+function decorateSpellCard(doc) {
+    const ctx = doc.flags?.pf2e?.context;
+    if (ctx?.type === "attack-roll" || ctx?.type === "damage-roll") return;
+    const flavor = doc.flavor ?? "";
+    if (flavor.includes("nth-fx") || flavor.includes("borrowed-fx")) return;
+    const originUuid = doc.flags?.pf2e?.origin?.uuid;
+    const item = originUuid ? fromUuidSync(originUuid, { strict: false }) : null;
+    if (!item || item.type !== "spell" || !SPELLS.has(item.name)) return;
+    const rawType = Object.values(item.system?.damageRolls ?? {})[0]?.damageType
+        ?? Object.values(item.system?.damage ?? {})[0]?.type ?? null;
+    const type = rawType && CARD_COLORS[rawType] ? rawType : "necro";
+    doc.updateSource({ flavor: `<span class="nth-fx" data-type="${type}" data-kind="card" hidden></span>${flavor}` });
+}
+
 // A card the module posted without a roll (Conglomerate Grab, "Bone Armor Activated!", spawn notes...).
 function decorateNecroCard(doc) {
     if (!doc.flags?.[MODULE]?.card || (doc.flavor ?? "").includes("nth-fx") || (doc.content ?? "").includes("nth-fx")) return;
@@ -114,6 +159,7 @@ function decorateNecroCard(doc) {
 
 function decorateNecroMessage(doc) {
     decorateRollCard(doc);
+    try { decorateSpellCard(doc); } catch (err) { console.warn("Necromancer Thrall Helper | Chat card styling skipped:", err); }
     try { decorateNecroCard(doc); } catch (err) { console.warn("Necromancer Thrall Helper | Chat card styling skipped:", err); }
 }
 
@@ -136,7 +182,7 @@ function decorateRollCard(doc) {
         let type = (ctx.type === "damage-roll" ? doc.rolls[0]?.instances?.[0]?.type : null)
             ?? Object.values(item.system?.damageRolls ?? {})[0]?.damageType
             ?? Object.values(item.system?.damage ?? {})[0]?.type ?? "untyped";
-        if (!CARD_COLORS[type]) type = "untyped";
+        if (!CARD_COLORS[type]) type = isSpell ? "necro" : "untyped";
 
         let head = "", tags = "";
         if (ctx.type === "attack-roll") {
@@ -185,18 +231,36 @@ function checkDramatisArt() {
     img.src = STRIKE_ART.physical;
 }
 
-/** Inject (or remove) the per-type card colors. The header layout CSS stays either way. */
-function applyChatCss(colors) {
-    document.getElementById("nth-chat-css")?.remove();
+/** The card sheet, added once and only when a card needs it. HEAD_CSS (header layout) is always present. */
+function addCardCss() {
+    if (document.getElementById("nth-card-css") || !game.settings.get(MODULE, "chatCardColors")) return;
     const style = document.createElement("style");
-    style.id = "nth-chat-css";
-    style.textContent = (colors ? chatCss() : "") + HEAD_CSS;
+    style.id = "nth-card-css";
+    style.textContent = chatCss();
     document.head.append(style);
 }
 
-/** Registers the card decorator and its per-type CSS. Called at ready on every client. */
+function applyChatCss(colors) {
+    document.getElementById("nth-card-css")?.remove();
+    if (colors) sweepLog(); // re-adds the sheet if the log holds themed cards
+}
+
+/** Style the cards already drawn (the log renders its first batch before ready, so the hook misses them). */
+function sweepLog() {
+    for (const li of document.querySelectorAll("li.chat-message[data-message-id]")) {
+        const message = game.messages.get(li.dataset.messageId);
+        if (message) styleCard(message, li);
+    }
+}
+
+/** Registers the card decorator and its CSS. Called at ready on every client. */
 export function registerNecroChatFx() {
     checkDramatisArt();
-    applyChatCss(game.settings.get(MODULE, "chatCardColors"));
+    const style = document.createElement("style");
+    style.id = "nth-chat-css";
+    style.textContent = HEAD_CSS;
+    document.head.append(style);
     Hooks.on("preCreateChatMessage", decorateNecroMessage);
+    Hooks.on("renderChatMessageHTML", styleCard);
+    sweepLog();
 }
